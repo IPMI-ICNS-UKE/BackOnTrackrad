@@ -71,6 +71,7 @@ RUN uv pip uninstall typing-extensions --system
 RUN uv pip install typing_extensions --system
 
 # TODO why cant falsh_attn be installed?
+# TODO check all versions and remove unneeded ones
 # TODO use org sam2
 
 #RUN pip install flash_attn
