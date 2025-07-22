@@ -67,9 +67,9 @@ COPY --chown=user:user training /opt/app/training
 COPY --chown=user:user setup.py /opt/app/
 
 RUN uv pip install -r requirements.txt --system
-RUN uv pip uninstall typing-extensions --system
-RUN uv pip install typing_extensions --system
-RUN pip install flash_attn
+#RUN uv pip uninstall typing-extensions --system
+#RUN uv pip install typing_extensions --system
+#RUN pip install flash_attn
 
 # Add any other files that are needed for your algorithm
 # COPY --chown=user:user <source> <destination>
