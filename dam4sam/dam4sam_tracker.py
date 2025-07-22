@@ -11,14 +11,15 @@ from sam2.build_sam import build_sam2_video_predictor
 from collections import OrderedDict
 import random
 import os
-from utils.utils import keep_largest_component, determine_tracker
+from dam4sam.utils.utils import keep_largest_component, determine_tracker
 
 from pathlib import Path
-config_path = Path(__file__).parent / "dam4sam_config.yaml"
-with open(config_path) as f:
-    config = yaml.load(f, Loader=yaml.FullLoader)
-
-seed = config["seed"]
+# config_path = Path(__file__).parent / "dam4sam_config.yaml"
+# with open(config_path) as f:
+#     config = yaml.load(f, Loader=yaml.FullLoader)
+#
+seed = 0
+# seed = config["seed"]
 random.seed(seed)
 os.environ['PYTHONHASHSEED'] = str(seed)
 np.random.seed(seed)

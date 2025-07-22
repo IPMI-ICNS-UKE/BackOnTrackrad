@@ -45,3 +45,11 @@ def run_algorithm(frames: np.ndarray, target: np.ndarray, frame_rate: float, mag
 
     # repeated_target.shape == (W, H, T)
     return tracked_masks
+
+
+if __name__ == "__main__":
+    run_algorithm(np.random.randn(512,512, 10).astype(np.float32),
+                  np.random.randn(512,512,1).astype(np.float32) > 0,
+                  0.0,
+                  0.0,
+                  "head")
