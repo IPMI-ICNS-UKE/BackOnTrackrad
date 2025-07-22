@@ -44,9 +44,9 @@ RUN python -m pip install \
 #$CMD $sam2p1_hiera_t_url || { echo "Failed to download checkpoint from $sam2p1_hiera_t_url"; exit 1; }
 #$CMD $sam2p1_hiera_s_url || { echo "Failed to download checkpoint from $sam2p1_hiera_s_url"; exit 1; }
 #$CMD $sam2p1_hiera_b_plus_url || { echo "Failed to download checkpoint from $sam2p1_hiera_b_plus_url"; exit 1; }
-RUN wget https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+RUN wget -P /opt/app/resources https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
 
-COPY --chown=user:user sam2.1_hiera_large.pt /opt/app/resources/sam2.1_hiera_large.pt
+#COPY --chown=user:user sam2.1_hiera_large.pt /opt/app/resources/sam2.1_hiera_large.pt
 COPY --chown=user:user inference.py /opt/app/
 COPY --chown=user:user model.py /opt/app/
 COPY --chown=user:users dam4sam /opt/app/
