@@ -82,4 +82,5 @@ RUN uv pip install typing_extensions --system
 #RUN pip install hydra-Core
 #RUN pip install vot-toolkit
 #RUN pip install vot-trax
+USER user
 ENTRYPOINT ["python", "inference.py"]
