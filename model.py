@@ -14,7 +14,7 @@ RESOURCE_PATH = Path("resources")  # load weights and other resources from this 
 
 
 def run_algorithm(frames: np.ndarray, target: np.ndarray, frame_rate: float, magnetic_field_strength: float, scanned_region: str) -> np.ndarray:
-    tracker = DAM4SAMTracker('sam21pp-L', base_path="/opt/ml/model/")
+    tracker = DAM4SAMTracker('sam21pp-L', base_path=RESOURCE_PATH)
     initial_mask = target[..., 0].astype(bool)
     frames = ((frames - frames.min()) / (frames.max() - frames.min())) * 255
     frames = frames.astype(np.uint8)

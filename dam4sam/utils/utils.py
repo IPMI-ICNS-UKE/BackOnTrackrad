@@ -26,16 +26,16 @@ def keep_largest_component(mask):
 
 def determine_tracker(tracker_name, base_path=None):
     if tracker_name == "sam21pp-L":
-        checkpoint = os.path.join(base_path, "checkpoints/sam2.1_hiera_large.pt")
+        checkpoint = os.path.join(base_path, "sam2.1_hiera_large.pt")
         model_cfg = "sam21pp_hiera_l.yaml"
     elif tracker_name == "sam21pp-B":
-        checkpoint = os.path.join(base_path, "checkpoints/sam2.1_hiera_base_plus.pt")
+        checkpoint = os.path.join(base_path, "sam2.1_hiera_base_plus.pt")
         model_cfg = "sam21pp_hiera_b+.yaml"
     elif tracker_name == "sam21pp-S":
-        checkpoint = os.path.join(base_path, "checkpoints/sam2.1_hiera_small.pt")
+        checkpoint = os.path.join(base_path, "sam2.1_hiera_small.pt")
         model_cfg = "sam21pp_hiera_s.yaml"
     elif tracker_name == "sam21pp-T":
-        checkpoint = os.path.join(base_path, "checkpoints/sam2.1_hiera_tiny.pt")
+        checkpoint = os.path.join(base_path, "sam2.1_hiera_tiny.pt")
         model_cfg = "sam21pp_hiera_t.yaml"
     elif tracker_name == "sam2pp-L":
         checkpoint = os.path.join(base_path, "sam2_hiera_large.pt")
