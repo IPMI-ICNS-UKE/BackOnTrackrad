@@ -1,4 +1,5 @@
-FROM --platform=linux/amd64 pytorch/pytorch
+FROM --platform=linux/amd64 pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel
+
 # Use an appropriate base image for your algorithm.
 # As an example, we use the official pytorch image.
 
@@ -18,11 +19,22 @@ COPY --chown=user:user requirements.txt /opt/app/
 COPY --chown=user:user resources /opt/app/resources
 
 # Install requirements.txt
-RUN python -m pip install \
-    --user \
-    --no-cache-dir \
-    --no-color \
-    --requirement /opt/app/requirements.txt
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+RUN apt-get install ffmpeg libsm6 libxext6  -y
+# Download the latest installer
+ADD https://astral.sh/uv/install.sh /uv-installer.sh
+# Run the installer then remove it
+RUN sh /uv-installer.sh && rm /uv-installer.sh
+# Ensure the installed binary is on the `PATH`
+ENV PATH="/root/.local/bin/:$PATH"
+
+#RUN pip install --upgrade pip
+#RUN python -m pip install \
+#    --user \
+#    --no-cache-dir \
+#    --no-color \
+#    --requirement /opt/app/requirements.txt
 
 #if command -v wget &> /dev/null; then
 #elif command -v curl &> /dev/null; then
@@ -42,20 +54,27 @@ RUN python -m pip install \
 #$CMD $sam2p1_hiera_t_url || { echo "Failed to download checkpoint from $sam2p1_hiera_t_url"; exit 1; }
 #$CMD $sam2p1_hiera_s_url || { echo "Failed to download checkpoint from $sam2p1_hiera_s_url"; exit 1; }
 #$CMD $sam2p1_hiera_b_plus_url || { echo "Failed to download checkpoint from $sam2p1_hiera_b_plus_url"; exit 1; }
-USER root
+
 RUN apt-get update && apt-get install -y wget
 RUN wget -P /opt/app/resources/ https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
 
 #COPY --chown=user:user sam2.1_hiera_large.pt /opt/app/resources/sam2.1_hiera_large.pt
 COPY --chown=user:user inference.py /opt/app/
-COPY --chown=user:user model.py /opt/app/
-COPY --chown=user:users dam4sam /opt/app/
-COPY --chown=user:user sam2 /opt/app/
-COPY --chown=user:user training /opt/app/
-COPY --chown=user:user __init__.py /opt/app/
+COPY --chown=user:user inference_model.py /opt/app/
+COPY --chown=user:users dam4sam /opt/app/dam4sam
+COPY --chown=user:user sam2 /opt/app/sam2
+COPY --chown=user:user training /opt/app/training
+COPY --chown=user:user setup.py /opt/app/
 
+RUN uv pip install -r requirements.txt --system
+RUN uv pip uninstall typing-extensions --system
+RUN uv pip install typing_extensions --system
+RUN pip install flash_attn
 
 # Add any other files that are needed for your algorithm
 # COPY --chown=user:user <source> <destination>
-
+#RUN pip install SimpleITK
+#RUN pip install hydra-Core
+#RUN pip install vot-toolkit
+#RUN pip install vot-trax
 ENTRYPOINT ["python", "inference.py"]

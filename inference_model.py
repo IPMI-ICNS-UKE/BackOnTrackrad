@@ -8,8 +8,10 @@ The file must contain a function called `run_algorithm` that takes two arguments
 from pathlib import Path
 import numpy as np
 from PIL import Image
-
+import sys
+sys.path.append('./dam4sam')
 from dam4sam.dam4sam_tracker import DAM4SAMTracker
+
 RESOURCE_PATH = Path("resources")  # load weights and other resources from this directory
 
 

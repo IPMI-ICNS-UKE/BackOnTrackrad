@@ -3,7 +3,7 @@ The following is an entrypoint script for an algorithm.
 
 It load the input data, runs the algorithm and saves the output data.
 
-The actual algorithm is implemented in the model.py file.
+The actual algorithm is implemented in the inference_model.py file.
 
 You should not need to modify this file.
 
@@ -41,7 +41,7 @@ def run():
 
     print(f"Runtime loading:   {time.perf_counter() - loading_start_time:.5f} s")
 
-    from model import run_algorithm
+    from inference_model import run_algorithm
 
     algo_start_time = time.perf_counter()
 
