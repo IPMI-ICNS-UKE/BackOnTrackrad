@@ -24,8 +24,6 @@ RUN python -m pip install \
     --no-color \
     --requirement /opt/app/requirements.txt
 
-#!/bin/bash
-
 #if command -v wget &> /dev/null; then
 #elif command -v curl &> /dev/null; then
 #    CMD="curl -L -O"
@@ -44,7 +42,9 @@ RUN python -m pip install \
 #$CMD $sam2p1_hiera_t_url || { echo "Failed to download checkpoint from $sam2p1_hiera_t_url"; exit 1; }
 #$CMD $sam2p1_hiera_s_url || { echo "Failed to download checkpoint from $sam2p1_hiera_s_url"; exit 1; }
 #$CMD $sam2p1_hiera_b_plus_url || { echo "Failed to download checkpoint from $sam2p1_hiera_b_plus_url"; exit 1; }
-RUN wget -P /opt/app/resources https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+USER root
+RUN apt-get update && apt-get install -y wget
+RUN wget -P /opt/app/resources/ https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
 
 #COPY --chown=user:user sam2.1_hiera_large.pt /opt/app/resources/sam2.1_hiera_large.pt
 COPY --chown=user:user inference.py /opt/app/
