@@ -101,7 +101,6 @@ def preprocess_stable(image, reference=None):
     return (255 * image).astype(np.uint8)
 
 def run_algorithm(frames: np.ndarray, target: np.ndarray, frame_rate: float, magnetic_field_strength: float, scanned_region: str) -> np.ndarray:
-    RESOURCE_PATH = '/home/tsentker/Documents/BackOnTrackrad/weights'
     tracker_t = DAM4SAMTracker('sam21pp-T', base_path=RESOURCE_PATH)
     tracker_s = DAM4SAMTracker('sam21pp-S', base_path=RESOURCE_PATH)
     tracker_b = DAM4SAMTracker('sam21pp-B', base_path=RESOURCE_PATH)
