@@ -106,7 +106,7 @@ def run_algorithm(frames: np.ndarray, target: np.ndarray, frame_rate: float, mag
     tracker_b = DAM4SAMTracker('sam21pp-B', base_path=RESOURCE_PATH)
     tracker_l = DAM4SAMTracker('sam21pp-L', base_path=RESOURCE_PATH)
 
-    initial_mask = target[..., 0].astype(bool)
+    initial_mask = target[..., 0]
     tracked_masks = [initial_mask]
 
     initial_frame = preprocess_stable(frames[..., 0:1])
@@ -131,7 +131,7 @@ def run_algorithm(frames: np.ndarray, target: np.ndarray, frame_rate: float, mag
 
         logits = np.stack([logits_t, logits_s, logits_b, logits_l], axis=-1)
         logits = np.mean(expit(logits), axis=-1)
-        logits = (logits > 0.5).astype(np.uint8)
+        logits = (logits > 0.5)
         logits = remove_small_objects(logits, min_size=28).astype(np.uint8)
         _, logits = crop_or_pad(target_shape=initial_shape, image=None, mask=logits)
 
