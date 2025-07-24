@@ -57,6 +57,9 @@ ENV PATH="/root/.local/bin/:$PATH"
 
 RUN apt-get update && apt-get install -y wget
 RUN wget -P /opt/app/resources/ https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+RUN wget -P /opt/app/resources/ https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt
+RUN wget -P /opt/app/resources/ https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt
+RUN wget -P /opt/app/resources/ https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt
 
 #COPY --chown=user:user sam2.1_hiera_large.pt /opt/app/resources/sam2.1_hiera_large.pt
 COPY --chown=user:user inference.py /opt/app/
