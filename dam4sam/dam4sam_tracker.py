@@ -138,7 +138,8 @@ class DAM4SAMTracker():
         if type(init_mask) is list:
             init_mask = init_mask[0]
         self.frame_index = 0 # Current frame index, updated frame-by-frame
-        self.object_sizes = [] # List to store object sizes (number of pixels) 
+        self.object_sizes = [] # List to store object sizes (number of pixels)
+        self.all_masks = []
         self.last_added = -1 # Frame index of the last added frame into DRM memory
         
         self.img_width = image.width # Original image width
@@ -178,6 +179,16 @@ class DAM4SAMTracker():
         out_dict = {'pred_mask': m}
         return out_dict
 
+    def compute_iou(self, mask1, mask2):
+        """
+        Compute Intersection over Union (IoU) between two binary masks.
+        """
+        intersection = np.logical_and(mask1, mask2).sum()
+        union = np.logical_or(mask1, mask2).sum()
+        if union == 0:
+            return 1.0  # Both masks are empty (no tumor)
+        return intersection / union
+
     @torch.inference_mode()
     def track(self, image, init=False):
         """
@@ -216,29 +227,34 @@ class DAM4SAMTracker():
                 m_iou = out_all_ious[m_idx] # Predicted IoU of the chosen predicted mask
                 # Delete the chosen predicted mask from the list of all predicted masks, leading to only alternative masks
                 alternative_masks = [mask for i, mask in enumerate(alternative_masks) if i != m_idx]
-
                 # Determine if the object ratio between the current frame and the previous frames is within a certain range
                 n_pixels = (m == 1).sum() 
                 self.object_sizes.append(n_pixels)
                 if len(self.object_sizes) > 1 and n_pixels >= 1:
                     obj_sizes_ratio = n_pixels / np.median([
-                        size for size in self.object_sizes[-300:] if size >= 1
+                        size for size in self.object_sizes[-20:] if size >= 1
                     ][-10:])
                 else:
                     obj_sizes_ratio = -1
-
                 # The first condition checks if:
                 #  - the chosen predicted mask has a high predicted IoU, 
                 #  - the object size ratio is within a +- 20% range compared to the previous frames, 
                 #  - the target is present in the current frame,
                 #  - the last added frame to DRM is more than 5 frames ago or no frame has been added yet
-                if m_iou > 0.8 and obj_sizes_ratio >= 0.8 and obj_sizes_ratio <= 1.2 and n_pixels >= 1 and (self.frame_index - self.last_added > 5 or self.last_added == -1):
+                # Numpy array of the chosen mask and corresponding bounding box
+                # self.all_masks.append(m)
+                # n_pixels_prev = (prev_mask == 1).sum()
+                # print(f'{n_pixels_prev=}; {n_pixels=}')
+                # if (n_pixels / n_pixels_prev) < 0.8 or (n_pixels / n_pixels_prev) > 1.2:
+                #     print('Using previous mask for current frame.')
+                #     m = prev_mask
+
+                if m_iou > 0.8 and obj_sizes_ratio >= 0.9 and obj_sizes_ratio <= 1.1 and n_pixels >= 1 and (self.frame_index - self.last_added > 5 or self.last_added == -1):
                     alternative_masks = [Mask((m_[0][0] > 0.0).cpu().numpy()).rasterize((0, 0, self.img_width - 1, self.img_height - 1)).astype(np.uint8) 
                                      for m_ in alternative_masks]
 
-                    # Numpy array of the chosen mask and corresponding bounding box
                     chosen_mask_np = m.copy()
-                    chosen_bbox = Mask(chosen_mask_np).convert(RegionType.RECTANGLE)
+                    # chosen_bbox = Mask(chosen_mask_np).convert(RegionType.RECTANGLE)
 
                     # Delete the parts of the alternative masks that overlap with the chosen mask
                     alternative_masks = [np.logical_and(m_, np.logical_not(chosen_mask_np)).astype(np.uint8) for m_ in alternative_masks]
@@ -248,14 +264,14 @@ class DAM4SAMTracker():
                         # Make the union of the chosen mask and the processed alternative masks (corresponding to the largest connected component)
                         alternative_masks = [np.logical_or(m_, chosen_mask_np).astype(np.uint8) for m_ in alternative_masks]
                         # Convert the processed alternative masks to bounding boxes to calculate the IoUs bounding box-wise
-                        alternative_bboxes = [Mask(m_).convert(RegionType.RECTANGLE) for m_ in alternative_masks]
+                        # alternative_bboxes = [Mask(m_).convert(RegionType.RECTANGLE) for m_ in alternative_masks]
                         # Calculate the IoUs between the chosen bounding box and the processed alternative bounding boxes
-                        ious = [calculate_overlaps([chosen_bbox], [bbox])[0] for bbox in alternative_bboxes]
+                        ious = [calculate_overlaps([chosen_mask_np], [mask])[0] for mask in alternative_masks]
                         
                         # The second condition checks if within the calculated IoUs, there is at least one IoU that is less than 0.7
                         # That would mean that there are significant differences between the chosen mask and the processed alternative masks, 
                         # leading to possible detections of distractors within alternative masks.
-                        if np.min(np.array(ious)) <= 0.7:
+                        if np.min(np.array(ious)) <= 0.9:
                             self.last_added = self.frame_index # Update the last added frame index
 
                             self.predictor.add_to_drm(
@@ -268,7 +284,7 @@ class DAM4SAMTracker():
             out_dict = {'pred_mask': m}
 
             self.inference_state["images"].pop(self.frame_index)
-            return out_dict
+            return out_dict, out_mask_logits[0][0].float().cpu().numpy()
 
     def estimate_mask_from_box(self, bbox):
         (
