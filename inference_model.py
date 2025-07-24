@@ -111,7 +111,8 @@ def run_algorithm(frames: np.ndarray, target: np.ndarray, frame_rate: float, mag
 
     initial_frame = preprocess_stable(frames[..., 0:1])
     initial_shape = initial_frame[..., 0].shape
-    initial_frame, initial_mask = crop_or_pad(target_shape=(256, 256), image=initial_frame[..., 0], mask=initial_mask)
+    target_shape = (initial_shape[0] - initial_shape[0] // 10 , initial_shape[1] // - initial_shape[1] // 10)
+    initial_frame, initial_mask = crop_or_pad(target_shape=target_shape, image=initial_frame[..., 0], mask=initial_mask)
     initial_frame = Image.fromarray(np.repeat(initial_frame[..., None], 3, -1), mode='RGB')
 
     tracker_t.initialize(initial_frame, initial_mask)
@@ -121,7 +122,7 @@ def run_algorithm(frames: np.ndarray, target: np.ndarray, frame_rate: float, mag
 
     for i in range(1, frames.shape[-1]):
         frame = preprocess_stable(frames[..., i:i + 1])
-        frame, _ = crop_or_pad(target_shape=(256, 256), image=frame[..., 0])
+        frame, _ = crop_or_pad(target_shape=target_shape, image=frame[..., 0])
         frame = Image.fromarray(np.repeat(frame[..., None], 3, -1), mode='RGB')
 
         _, logits_t = tracker_t.track(frame)
