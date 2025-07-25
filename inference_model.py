@@ -53,7 +53,7 @@ def run_algorithm(frames: np.ndarray, target: np.ndarray, frame_rate: float, mag
             prev_mask,
             initial_mask,
             w_dice=1.0,
-            w_penalty=1.0,
+            w_penalty=2.0,
             w_dose=1.0,
             is_lung=True if 'lung' in scanned_region else False,
         )
