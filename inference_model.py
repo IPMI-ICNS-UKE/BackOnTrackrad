@@ -8,11 +8,12 @@ The file must contain a function called `run_algorithm` that takes two arguments
 from pathlib import Path
 import numpy as np
 from PIL import Image
+import cv2
+from skimage.morphology import remove_small_objects
 import sys
 sys.path.append('./dam4sam')
 from dam4sam.dam4sam_tracker import DAM4SAMTracker
-import cv2
-from skimage.morphology import remove_small_objects
+sys.path.append('./')
 from processing import ensemble, crop_to_bbox, pad_to_full_image, preprocess_stable
 
 RESOURCE_PATH = Path("resources")  # load weights and other resources from this directory
@@ -54,7 +55,7 @@ def run_algorithm(frames: np.ndarray, target: np.ndarray, frame_rate: float, mag
             initial_mask,
             w_dice=1.0,
             w_penalty=2.0,
-            w_dose=1.0,
+            w_dose=0.5,
             is_lung=True if 'lung' in scanned_region else False,
         )
 
