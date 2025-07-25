@@ -12,10 +12,10 @@ import sys
 sys.path.append('./dam4sam')
 from dam4sam.dam4sam_tracker import DAM4SAMTracker
 import cv2
-import sys
-from scipy.ndimage import gaussian_filter, median_filter
 from scipy.special import expit
 from skimage.morphology import remove_small_objects
+from skimage.measure import label, regionprops
+
 import math
 
 RESOURCE_PATH = Path("resources")  # load weights and other resources from this directory
