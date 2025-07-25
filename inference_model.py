@@ -152,10 +152,6 @@ def preprocess_stable(image, reference=None):
     # 4. Convert to uint8 for downstream
     return (255 * image).astype(np.uint8)
 
-ROOT_PATH = Path('/home/tsentker/data/trackrad/trackrad2025_labeled_training_data')
-OUT_PATH = Path('/home/tsentker/data/trackrad/out')
-
-
 def get_mask_stats(mask):
     labeled = label(mask)
     props = regionprops(labeled)
