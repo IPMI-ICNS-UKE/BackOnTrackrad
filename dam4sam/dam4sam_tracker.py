@@ -284,7 +284,7 @@ class DAM4SAMTracker():
             out_dict = {'pred_mask': m}
 
             self.inference_state["images"].pop(self.frame_index)
-            return out_dict, out_mask_logits[0][0].float().cpu().numpy()
+            return m, out_mask_logits[0][0].float().cpu().numpy()
 
     def estimate_mask_from_box(self, bbox):
         (

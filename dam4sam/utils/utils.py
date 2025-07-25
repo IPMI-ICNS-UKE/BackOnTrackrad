@@ -28,6 +28,9 @@ def determine_tracker(tracker_name, base_path=None):
     if tracker_name == "sam21pp-L":
         checkpoint = os.path.join(base_path, "sam2.1_hiera_large.pt")
         model_cfg = "sam21pp_hiera_l.yaml"
+    elif tracker_name == "medsam_custom":
+        checkpoint = os.path.join(base_path, "MedSAM2_pretrain.pth")
+        model_cfg = "sam21pp_hiera_t.yaml"
     elif tracker_name == "sam21pp-B":
         checkpoint = os.path.join(base_path, "sam2.1_hiera_base_plus.pt")
         model_cfg = "sam21pp_hiera_b+.yaml"
