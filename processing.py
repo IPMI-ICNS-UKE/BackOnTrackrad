@@ -285,8 +285,7 @@ def ensemble(
     weights[weights < 0] = 0
 
     if normalize_scores and weights.sum() > 0:
-        weights = np.exp(weights - np.max(weights))
-        weights /= weights.sum()
+        weights = weights / weights.sum()
     else:
         weights = np.ones_like(weights) / len(weights)
 
