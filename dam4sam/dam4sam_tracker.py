@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 import numpy as np
 import yaml
 from hydra import compose
@@ -163,10 +165,11 @@ class DAM4SAMTracker():
         prepared_img = self._prepare_image(image)
         self.inference_state["images"] = {0 : prepared_img}
         self.inference_state["num_frames"] = 1
-        [p.reset_state(self.inference_state) for p in self.predictors]
+        self.inference_states = [deepcopy(self.inference_state) for i in range(len(self.predictors))]
+        [p.reset_state(i) for i, p in zip(self.inference_states, self.predictors)]
 
         # warm up the model
-        [p._get_image_feature(self.inference_state, frame_idx=0, batch_size=1) for p in self.predictors]
+        [p._get_image_feature(i, frame_idx=0, batch_size=1) for i, p in zip(self.inference_states,self.predictors)]
 
         if init_mask is None:
             if bbox is None:
@@ -178,9 +181,9 @@ class DAM4SAMTracker():
 
         out_mask_logits = []
         masks = []
-        for p in self.predictors:
+        for i, p in zip(self.inference_states, self.predictors):
             _, _, out_mask_logit = p.add_new_mask(
-                inference_state=self.inference_state,
+                inference_state=i,
                 frame_idx=0,
                 obj_id=0,
                 mask=init_mask,
@@ -188,8 +191,9 @@ class DAM4SAMTracker():
             out_mask_logit = out_mask_logit[0][0].float().cpu().numpy() # Extract the mask logits
             out_mask_logits.append(out_mask_logit)
             masks.append(out_mask_logit > 0)
+        # TODO combine inference states
         m = masks[0]
-        self.inference_state["images"].pop(self.frame_index)
+        [i["images"].pop(self.frame_index) for i in self.inference_states]  # Remove the image from the inference state
 
         out_dict = {'pred_mask': m}
         return out_dict
@@ -227,7 +231,7 @@ class DAM4SAMTracker():
 
         # Weighted average of probability maps
         final_prob = np.tensordot(weights, np.stack(probs, axis=0), axes=1)
-        final_mask = (final_prob > binarize_thresh).astype(np.uint8)
+        final_mask = (final_prob > binarize_thresh)
 
         return final_mask
 
@@ -259,18 +263,18 @@ class DAM4SAMTracker():
         prepared_img = self._prepare_image(image).unsqueeze(0)
         if not init:
             self.frame_index += 1
-            self.inference_state["num_frames"] += 1
-        self.inference_state["images"][self.frame_index] = prepared_img
-
+            for i in self.inference_states:
+                i["num_frames"] += 1
         # Propagate the tracking to the next frame
         # return_all_masks=True returns all predicted (chosen and alternative) masks and corresponding IoUs
         out_mask_logits = []
         masks = []
         ious = []
-        for p in self.predictors:
+        for i, p in zip(self.inference_states, self.predictors):
+            i["images"][self.frame_index] = prepared_img
             # TODO propagate in video allways uses all previous state this must be possible more efficiently
             out = p.propagate_in_video(
-                inference_state=self.inference_state,
+                inference_state=i,
                 start_frame_idx=self.frame_index,
                 max_frame_num_to_track=0,
                 return_all_masks=True
@@ -326,7 +330,7 @@ class DAM4SAMTracker():
         #     m = prev_mask
 
         if m_iou > 0.8 and obj_sizes_ratio >= 0.9 and obj_sizes_ratio <= 1.1 and n_pixels >= 1 and (self.frame_index - self.last_added > 5 or self.last_added == -1):
-            masks = [Mask((m_[0][0] > 0.0).cpu().numpy()).rasterize((0, 0, self.img_width - 1, self.img_height - 1)).astype(np.uint8)
+            masks = [Mask(m_).rasterize((0, 0, self.img_width - 1, self.img_height - 1)).astype(np.uint8)
                              for m_ in masks]
 
             chosen_mask_np = m.copy()
@@ -352,15 +356,15 @@ class DAM4SAMTracker():
                 if np.min(np.array(out_all_dices)) <= 0.8:
                     self.last_added = self.frame_index # Update the last added frame index
 
-                    [p.add_to_drm(inference_state=self.inference_state, frame_idx=out_frame_idx, obj_id=0,)
-                     for p in self.predictors]
+                    [p.add_to_drm(inference_state=i, frame_idx=out_frame_idx, obj_id=0,)
+                     for i, p in zip(self.inference_states, self.predictors)]
             # Return the predicted mask for the current frame
             # out_dict = {'pred_mask': m}
 
         self.prev_mask = m.copy()  # Update the previous mask for the next frame
         # TODO update the inference state with the current mask
-        self.inference_state["images"].pop(self.frame_index)
-        return m
+        [i["images"].pop(self.frame_index) for i in self.inference_states]  # Remove the image from the inference state
+        return m.astype(np.uint8)
 
     def estimate_mask_from_box(self, bbox):
         (
