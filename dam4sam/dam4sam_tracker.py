@@ -3,10 +3,13 @@ import yaml
 from hydra import compose
 import torch
 import torchvision.transforms.functional as F
+from scipy.special import expit
 
 from vot.region.raster import calculate_overlaps
 from vot.region.shapes import Mask
 from vot.region import RegionType
+
+from processing import dice_score, get_mask_stats, shape_penalty, compute_dose_penalty
 from sam2.build_sam import build_sam2_video_predictor
 from collections import OrderedDict
 import random
@@ -27,7 +30,7 @@ torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
 
 class DAM4SAMTracker():
-    def __init__(self, tracker_name="sam21pp-L", base_path=None):
+    def __init__(self, tracker_names=["sam21pp-L"], base_path=None):
         """
         Constructor for the DAM4SAM (2 or 2.1) tracking wrapper.
 
@@ -42,22 +45,24 @@ class DAM4SAMTracker():
             - "sam2pp-S": DAM4SAM (2) Hiera Small
             - "sam2pp-T": DAM4SAM (2) Hier Tiny
         """
-        self.checkpoint, self.model_cfg = determine_tracker(tracker_name, base_path)
-        model_cfg = compose(config_name=self.model_cfg, overrides=[
-        "++model._target_=sam2.sam2_video_predictor.SAM2VideoPredictor",
-    ])
-        # Image preprocessing parameters
-        self.input_image_size = model_cfg.model.image_size
-        self.img_mean = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32)[:, None, None]
-        self.img_std = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32)[:, None, None]
-        
-        self.predictor = build_sam2_video_predictor(self.model_cfg, self.checkpoint, device="cuda:0")
+        self.predictors = []
+        for t in tracker_names:
+            self.checkpoint, self.model_cfg = determine_tracker(t, base_path)
+            model_cfg = compose(config_name=self.model_cfg, overrides=[
+            "++model._target_=sam2.sam2_video_predictor.SAM2VideoPredictor",
+        ])
+            # Image preprocessing parameters
+            self.input_image_size = model_cfg.model.image_size
+            self.img_mean = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32)[:, None, None]
+            self.img_std = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32)[:, None, None]
+
+            self.predictors.append(build_sam2_video_predictor(self.model_cfg, self.checkpoint, device="cuda:0"))
         self.tracking_times = []
 
-    def _prepare_image(self, img_pil):
+    def _prepare_image(self, img):
         # _load_img_as_tensor from SAM2
-        img = torch.from_numpy(np.array(img_pil)).to(self.inference_state["device"])
-        img = img.permute(2, 0, 1).float() / 255.0
+        img = torch.from_numpy(img).to(self.inference_state["device"])
+        # img = img.permute(2, 0, 1).float()# / 255.0
         img = F.resize(img, (self.input_image_size, self.input_image_size))
         img = (img - self.img_mean) / self.img_std        
         return img
@@ -123,7 +128,7 @@ class DAM4SAMTracker():
         return inference_state
     
     @torch.inference_mode()
-    def initialize(self, image, init_mask, bbox=None):
+    def initialize(self, image, init_mask, bbox=None, spacing_mm=1.0, is_lung=True, ensembling_params=None):
         """
         Initialize the tracker with the first frame and mask.
         Function builds the DAM4SAM (2.1) tracker and initializes it with the first frame and mask.
@@ -137,25 +142,31 @@ class DAM4SAMTracker():
         """
         if type(init_mask) is list:
             init_mask = init_mask[0]
+        self.initial_stats = get_mask_stats(init_mask)
+        self.init_mask = init_mask
+        self.spacing = spacing_mm
+        self.is_lung = is_lung
+        self.ensembling_params = ensembling_params
+        self.prev_mask = init_mask
         self.frame_index = 0 # Current frame index, updated frame-by-frame
         self.object_sizes = [] # List to store object sizes (number of pixels)
         self.all_masks = []
         self.last_added = -1 # Frame index of the last added frame into DRM memory
         
-        self.img_width = image.width # Original image width
-        self.img_height = image.height # Original image height
+        self.img_width = image.shape[-1]  # Original image width
+        self.img_height = image.shape[-2]  # Original image height
         self.inference_state = self.init_state_tw()
         self.inference_state["images"] = image
-        video_width, video_height = image.size 
+        video_width, video_height = image.shape[-1], image.shape[-2]
         self.inference_state["video_height"] = video_height
         self.inference_state["video_width"] =  video_width
         prepared_img = self._prepare_image(image)
         self.inference_state["images"] = {0 : prepared_img}
         self.inference_state["num_frames"] = 1
-        self.predictor.reset_state(self.inference_state)
+        [p.reset_state(self.inference_state) for p in self.predictors]
 
         # warm up the model
-        self.predictor._get_image_feature(self.inference_state, frame_idx=0, batch_size=1)
+        [p._get_image_feature(self.inference_state, frame_idx=0, batch_size=1) for p in self.predictors]
 
         if init_mask is None:
             if bbox is None:
@@ -165,19 +176,60 @@ class DAM4SAMTracker():
             # consider bbox initialization - estimate init mask from bbox first
             init_mask = self.estimate_mask_from_box(bbox)
 
-
-        _, _, out_mask_logits = self.predictor.add_new_mask(
-            inference_state=self.inference_state,
-            frame_idx=0,
-            obj_id=0,
-            mask=init_mask,
-        )   
-
-        m = (out_mask_logits[0, 0] > 0).float().cpu().numpy().astype(np.uint8)
+        out_mask_logits = []
+        masks = []
+        for p in self.predictors:
+            _, _, out_mask_logit = p.add_new_mask(
+                inference_state=self.inference_state,
+                frame_idx=0,
+                obj_id=0,
+                mask=init_mask,
+            )
+            out_mask_logit = out_mask_logit[0][0].float().cpu().numpy() # Extract the mask logits
+            out_mask_logits.append(out_mask_logit)
+            masks.append(out_mask_logit > 0)
+        m = masks[0]
         self.inference_state["images"].pop(self.frame_index)
 
         out_dict = {'pred_mask': m}
         return out_dict
+
+    def _ensemble_masks(self, out_mask_logits,
+                        pred_masks,
+                        normalize=True,
+                        binarize_thresh=0.5,
+                        w_dice=1.0,
+                        w_penalty=1.0,
+                        w_dose=1.0):
+        weights = []
+        probs = []
+
+        for logits, pred_mask in zip(out_mask_logits, pred_masks):
+            prob = expit(logits)
+
+            d = dice_score(pred_mask, self.prev_mask)
+            p = shape_penalty(pred_mask, self.initial_stats)
+            dose = compute_dose_penalty(self.init_mask, pred_mask, self.spacing, self.is_lung)
+            score = w_dice * d - w_penalty * p - w_dose * dose
+
+            weights.append(score)
+            probs.append(prob)
+
+        weights = np.array(weights)
+
+        # Remove extremely bad predictions (optional)
+        weights[weights < 0] = 0
+
+        if normalize and weights.sum() > 0:
+            weights = weights / weights.sum()
+        else:
+            weights = np.ones_like(weights) / len(weights)
+
+        # Weighted average of probability maps
+        final_prob = np.tensordot(weights, np.stack(probs, axis=0), axes=1)
+        final_mask = (final_prob > binarize_thresh).astype(np.uint8)
+
+        return final_mask
 
     def compute_iou(self, mask1, mask2):
         """
@@ -201,6 +253,7 @@ class DAM4SAMTracker():
         Returns:
         - out_dict (dict): Dictionary containing the predicted mask for the current frame.
         """
+        # TODO autocast?!
         torch.cuda.empty_cache()
         # Prepare the image for input to the model
         prepared_img = self._prepare_image(image).unsqueeze(0)
@@ -211,80 +264,103 @@ class DAM4SAMTracker():
 
         # Propagate the tracking to the next frame
         # return_all_masks=True returns all predicted (chosen and alternative) masks and corresponding IoUs
-        for out in self.predictor.propagate_in_video(self.inference_state, start_frame_idx=self.frame_index, max_frame_num_to_track=0, return_all_masks=True):
-            if len(out) == 3:
-                # There are 3 outputs when the tracking is done on the initialization frame
-                out_frame_idx, _, out_mask_logits = out
-                m = (out_mask_logits[0][0] > 0.0).float().cpu().numpy().astype(np.uint8)
-            else:
+        out_mask_logits = []
+        masks = []
+        ious = []
+        for p in self.predictors:
+            # TODO propagate in video allways uses all previous state this must be possible more efficiently
+            out = p.propagate_in_video(
+                inference_state=self.inference_state,
+                start_frame_idx=self.frame_index,
+                max_frame_num_to_track=0,
+                return_all_masks=True
+            ).__next__()
+            out_mask_logit = out[2]
+            out_frame_idx = out[0]
+            ious.append(out[3][1].max())
+            out_mask_logit = out_mask_logit[0][0].float().cpu().numpy() # Extract the mask logits
+            out_mask_logits.append(out_mask_logit)
+            masks.append(out_mask_logit > 0)
+        m = self._ensemble_masks(out_mask_logits, masks, **self.ensembling_params)
+        # TODO woher kommt dieser wert eigentlich? können wir dafür irgendwo zwischen einen dice berechnen?  evtl prev frame?
+        m_iou = np.mean(ious)
+
+
+        # for out in self.predictor.propagate_in_video(self.inference_state, start_frame_idx=self.frame_index, max_frame_num_to_track=0, return_all_masks=True):
+            # if len(out) == 3:
+            #     # There are 3 outputs when the tracking is done on the initialization frame
+            #     out_frame_idx, _, out_mask_logits = out
+            #     m = (out_mask_logits[0][0] > 0.0).float().cpu().numpy().astype(np.uint8)
+            # else:
                 # There are 4 outputs when the tracking is done on a non-initialization frame
                 # alternative_masks_ious is a tuple containing chosen and alternative masks and corresponding predicted IoUs
-                out_frame_idx, _, out_mask_logits, alternative_masks_ious = out
-                m = (out_mask_logits[0][0] > 0.0).float().cpu().numpy().astype(np.uint8)
+        # out_frame_idx, _, out_mask_logits, alternative_masks_ious = out
+        # m = (out_mask_logits[0][0] > 0.0).float().cpu().numpy().astype(np.uint8)
 
-                alternative_masks, out_all_ious = alternative_masks_ious # Extract all predicted masks (chosen and alternatives) and IoUs
-                m_idx = np.argmax(out_all_ious) # Index of the chosen predicted mask
-                m_iou = out_all_ious[m_idx] # Predicted IoU of the chosen predicted mask
-                # Delete the chosen predicted mask from the list of all predicted masks, leading to only alternative masks
-                alternative_masks = [mask for i, mask in enumerate(alternative_masks) if i != m_idx]
-                # Determine if the object ratio between the current frame and the previous frames is within a certain range
-                n_pixels = (m == 1).sum() 
-                self.object_sizes.append(n_pixels)
-                if len(self.object_sizes) > 1 and n_pixels >= 1:
-                    obj_sizes_ratio = n_pixels / np.median([
-                        size for size in self.object_sizes[-20:] if size >= 1
-                    ][-10:])
-                else:
-                    obj_sizes_ratio = -1
-                # The first condition checks if:
-                #  - the chosen predicted mask has a high predicted IoU, 
-                #  - the object size ratio is within a +- 20% range compared to the previous frames, 
-                #  - the target is present in the current frame,
-                #  - the last added frame to DRM is more than 5 frames ago or no frame has been added yet
-                # Numpy array of the chosen mask and corresponding bounding box
-                # self.all_masks.append(m)
-                # n_pixels_prev = (prev_mask == 1).sum()
-                # print(f'{n_pixels_prev=}; {n_pixels=}')
-                # if (n_pixels / n_pixels_prev) < 0.8 or (n_pixels / n_pixels_prev) > 1.2:
-                #     print('Using previous mask for current frame.')
-                #     m = prev_mask
+        # alternative_masks, out_all_ious = alternative_masks_ious # Extract all predicted masks (chosen and alternatives) and IoUs
+        # m_idx = np.argmax(out_all_ious) # Index of the chosen predicted mask
+        # m_iou = out_all_ious[m_idx] # Predicted IoU of the chosen predicted mask
+        # Delete the chosen predicted mask from the list of all predicted masks, leading to only alternative masks
+        # alternative_masks = [mask for i, mask in enumerate(alternative_masks) if i != m_idx]
+        # Determine if the object ratio between the current frame and the previous frames is within a certain range
 
-                if m_iou > 0.8 and obj_sizes_ratio >= 0.9 and obj_sizes_ratio <= 1.1 and n_pixels >= 1 and (self.frame_index - self.last_added > 5 or self.last_added == -1):
-                    alternative_masks = [Mask((m_[0][0] > 0.0).cpu().numpy()).rasterize((0, 0, self.img_width - 1, self.img_height - 1)).astype(np.uint8) 
-                                     for m_ in alternative_masks]
+        n_pixels = (m == 1).sum()
+        self.object_sizes.append(n_pixels)
+        if len(self.object_sizes) > 1 and n_pixels >= 1:
+            obj_sizes_ratio = n_pixels / np.median([
+                size for size in self.object_sizes[-20:] if size >= 1
+            ][-10:])
+        else:
+            obj_sizes_ratio = -1
+        # The first condition checks if:
+        #  - the chosen predicted mask has a high predicted IoU,
+        #  - the object size ratio is within a +- 20% range compared to the previous frames,
+        #  - the target is present in the current frame,
+        #  - the last added frame to DRM is more than 5 frames ago or no frame has been added yet
+        # Numpy array of the chosen mask and corresponding bounding box
+        # self.all_masks.append(m)
+        # n_pixels_prev = (prev_mask == 1).sum()
+        # print(f'{n_pixels_prev=}; {n_pixels=}')
+        # if (n_pixels / n_pixels_prev) < 0.8 or (n_pixels / n_pixels_prev) > 1.2:
+        #     print('Using previous mask for current frame.')
+        #     m = prev_mask
 
-                    chosen_mask_np = m.copy()
-                    # chosen_bbox = Mask(chosen_mask_np).convert(RegionType.RECTANGLE)
+        if m_iou > 0.8 and obj_sizes_ratio >= 0.9 and obj_sizes_ratio <= 1.1 and n_pixels >= 1 and (self.frame_index - self.last_added > 5 or self.last_added == -1):
+            masks = [Mask((m_[0][0] > 0.0).cpu().numpy()).rasterize((0, 0, self.img_width - 1, self.img_height - 1)).astype(np.uint8)
+                             for m_ in masks]
 
-                    # Delete the parts of the alternative masks that overlap with the chosen mask
-                    alternative_masks = [np.logical_and(m_, np.logical_not(chosen_mask_np)).astype(np.uint8) for m_ in alternative_masks]
-                    # Keep only the largest connected component of the processed alternative masks
-                    alternative_masks = [keep_largest_component(m_) for m_ in alternative_masks if np.sum(m_) >= 1]
-                    if len(alternative_masks) > 0:
-                        # Make the union of the chosen mask and the processed alternative masks (corresponding to the largest connected component)
-                        alternative_masks = [np.logical_or(m_, chosen_mask_np).astype(np.uint8) for m_ in alternative_masks]
-                        # Convert the processed alternative masks to bounding boxes to calculate the IoUs bounding box-wise
-                        # alternative_bboxes = [Mask(m_).convert(RegionType.RECTANGLE) for m_ in alternative_masks]
-                        # Calculate the IoUs between the chosen bounding box and the processed alternative bounding boxes
-                        ious = [calculate_overlaps([chosen_mask_np], [mask])[0] for mask in alternative_masks]
-                        
-                        # The second condition checks if within the calculated IoUs, there is at least one IoU that is less than 0.7
-                        # That would mean that there are significant differences between the chosen mask and the processed alternative masks, 
-                        # leading to possible detections of distractors within alternative masks.
-                        if np.min(np.array(ious)) <= 0.9:
-                            self.last_added = self.frame_index # Update the last added frame index
+            chosen_mask_np = m.copy()
+            # chosen_bbox = Mask(chosen_mask_np).convert(RegionType.RECTANGLE)
 
-                            self.predictor.add_to_drm(
-                                inference_state=self.inference_state,
-                                frame_idx=out_frame_idx,
-                                obj_id=0,
-                            )
+            # Delete the parts of the alternative masks that overlap with the chosen mask
+            masks = [np.logical_and(m_, np.logical_not(chosen_mask_np)).astype(np.uint8) for m_ in masks]
+            # Keep only the largest connected component of the processed alternative masks
+            masks = [keep_largest_component(m_) for m_ in masks if np.sum(m_) >= 1]
+            if len(masks) > 0:
+                # Make the union of the chosen mask and the processed alternative masks (corresponding to the largest connected component)
+                masks = [np.logical_or(m_, chosen_mask_np).astype(np.uint8) for m_ in masks]
+                out_all_dices = [dice_score(m, mask) for mask in masks]
 
+                # Convert the processed alternative masks to bounding boxes to calculate the IoUs bounding box-wise
+                # alternative_bboxes = [Mask(m_).convert(RegionType.RECTANGLE) for m_ in alternative_masks]
+                # Calculate the IoUs between the chosen bounding box and the processed alternative bounding boxes
+                # ious = [calculate_overlaps([chosen_mask_np], [mask])[0] for mask in alternative_masks]
+
+                # The second condition checks if within the calculated IoUs, there is at least one IoU that is less than 0.7
+                # That would mean that there are significant differences between the chosen mask and the processed alternative masks,
+                # leading to possible detections of distractors within alternative masks.
+                if np.min(np.array(out_all_dices)) <= 0.8:
+                    self.last_added = self.frame_index # Update the last added frame index
+
+                    [p.add_to_drm(inference_state=self.inference_state, frame_idx=out_frame_idx, obj_id=0,)
+                     for p in self.predictors]
             # Return the predicted mask for the current frame
-            out_dict = {'pred_mask': m}
+            # out_dict = {'pred_mask': m}
 
-            self.inference_state["images"].pop(self.frame_index)
-            return m, out_mask_logits[0][0].float().cpu().numpy()
+        self.prev_mask = m.copy()  # Update the previous mask for the next frame
+        # TODO update the inference state with the current mask
+        self.inference_state["images"].pop(self.frame_index)
+        return m
 
     def estimate_mask_from_box(self, bbox):
         (
