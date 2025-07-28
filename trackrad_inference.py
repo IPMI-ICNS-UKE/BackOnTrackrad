@@ -25,7 +25,7 @@ def _write_mha(path, img):
 if __name__ == '__main__':
     tbar = tqdm(list(ROOT_PATH.iterdir()))
     dices = []
-    multi_tracker = DAM4SAMTracker(tracker_names=['sam21pp-T', 'sam21pp-S', 'sam21pp-B', 'sam21pp-L'],
+    multi_tracker = DAM4SAMTracker(tracker_names=['medsam2pp-T', 'sam21pp-T', 'sam21pp-S', 'sam21pp-B'],# 'sam21pp-L'],
                                    base_path=WEIGHT_PATH)
 
     for folder in tbar:

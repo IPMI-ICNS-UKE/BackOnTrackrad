@@ -53,30 +53,10 @@ def determine_tracker(tracker_name, base_path=None):
         checkpoint = os.path.join(base_path, "sam2_hiera_tiny.pt")
         model_cfg = "sam2pp_hiera_t.yaml"
 
-    elif tracker_name == "medsam21pp-L":
-        checkpoint = os.path.join(base_path, "med_sam_checkpoints/sam2_hiera_large.pt")
-        model_cfg = "sam21pp_hiera_l.yaml"
-    elif tracker_name == "sam21pp-B":
-        checkpoint = os.path.join(base_path, "med_sam_checkpoints/sam2_hiera_base_plus.pt")
-        model_cfg = "sam21pp_hiera_b+.yaml"
-    elif tracker_name == "sam21pp-S":
-        checkpoint = os.path.join(base_path, "med_sam_checkpoints/sam2_hiera_small.pt")
-        model_cfg = "sam21pp_hiera_s.yaml"
-    elif tracker_name == "sam21pp-T":
-        checkpoint = os.path.join(base_path, "med_sam_checkpoints/sam2_hiera_tiny.pt")
-        model_cfg = "sam21pp_hiera_t.yaml"
-    elif tracker_name == "medsam2pp-L":
-        checkpoint = os.path.join(base_path, "med_sam_checkpoints/sam2_hiera_large.pt")
-        model_cfg = "sam2pp_hiera_l.yaml"
-    elif tracker_name == "sam2pp-B":
-        checkpoint = os.path.join(base_path, "med_sam_checkpoints//sam2_hiera_base_plus.pt")
-        model_cfg = "sam2pp_hiera_b+.yaml"
-    elif tracker_name == "medsam2pp-S":
-        checkpoint = os.path.join(base_path, "med_sam_checkpoints/sam2_hiera_small.pt")
-        model_cfg = "sam2pp_hiera_s.yaml"
     elif tracker_name == "medsam2pp-T":
-        checkpoint = os.path.join(base_path, "med_sam_checkpoints/sam2_hiera_tiny.pt")
-        model_cfg = "sam2pp_hiera_t.yaml"
+        checkpoint = os.path.join(base_path, "MedSAM2_latest.pt")
+        model_cfg = "sam21pp_hiera_t.yaml"
+
     return checkpoint, model_cfg
 
 def get_seq_names(dataset_path):
