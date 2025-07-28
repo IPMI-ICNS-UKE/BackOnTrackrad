@@ -323,13 +323,14 @@ def run_algorithm(frames: np.ndarray, target: np.ndarray, frame_rate: float, mag
 
     initial_mask = target[..., 0]
     tracked_masks = [initial_mask]
+    initial_shape = frames.shape[:2]
 
-    initial_frame = preprocess_stable(frames[..., 0:1])
-    initial_shape = initial_frame[..., 0].shape
-    initial_frame, initial_mask, bbox = crop_to_bbox(image=initial_frame[..., 0], mask=initial_mask, bbox=None, margin=50,
+    initial_frame, initial_mask, bbox = crop_to_bbox(image=frames[..., 0:1], mask=initial_mask, bbox=None, margin=50,
                                              size_multiple=256)
+    initial_frame = preprocess_stable(initial_frame)
 
-    initial_frame = Image.fromarray(np.repeat(initial_frame[..., None], 3, -1), mode='RGB')
+
+    initial_frame = Image.fromarray(np.repeat(initial_frame, 3, -1), mode='RGB')
 
     tracker_t.initialize(initial_frame, initial_mask)
     tracker_s.initialize(initial_frame, initial_mask)
@@ -338,8 +339,8 @@ def run_algorithm(frames: np.ndarray, target: np.ndarray, frame_rate: float, mag
 
     trackers = [tracker_t, tracker_s, tracker_b, tracker_l]
     for i in range(1, frames.shape[-1]):
-        frame = preprocess_stable(frames[..., i:i + 1])
-        frame, _, _ = crop_to_bbox(image=frame[..., 0], mask=None, bbox=bbox)
+        frame, _, _ = crop_to_bbox(image=frames[..., i:i + 1], mask=None, bbox=bbox)
+        frame = preprocess_stable(frame)
         frame = Image.fromarray(np.repeat(frame[..., None], 3, -1), mode='RGB')
 
         prev_mask, _, _ = crop_to_bbox(image=tracked_masks[-1], mask=None, bbox=bbox)

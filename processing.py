@@ -238,7 +238,7 @@ def predict(
     w_dose=0.5,
     spacing_mm=1.0,
     is_lung=True,
-    binarize_thresh=0.5,
+    threshold_list=[0.3, 0.4, 0.5, 0.6, 0.7],
     normalize_scores=True
 ):
     """
@@ -289,9 +289,17 @@ def predict(
 
     # Weighted average of probability maps
     final_prob = np.tensordot(weights, np.stack(probs, axis=0), axes=1)
-    final_mask = (final_prob > binarize_thresh).astype(np.uint8)
 
-    return final_mask
+    best_dice = -1
+    best_mask = None
+    for thresh in threshold_list:
+        mask = (final_prob > thresh).astype(np.uint8)
+        d = dice_score(mask, prev_mask)
+        if d > best_dice:
+            best_dice = d
+            best_mask = mask
+
+    return best_mask
 
 
 def dice_score(pred, gt, smooth=1e-6):
