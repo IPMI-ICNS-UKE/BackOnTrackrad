@@ -7,6 +7,7 @@ import torch
 import torchvision.transforms.functional as F
 from scipy.special import expit
 from scipy.ndimage import center_of_mass
+from torchvision.ops import masks_to_boxes
 
 from vot.region.raster import calculate_overlaps
 from vot.region.shapes import Mask
@@ -204,21 +205,20 @@ class DAM4SAMTracker():
                         threshold_list=[0.45, 0.5, 0.66],
                         w_dice=1.0,
                         frame_rate=1,
-                        w_penalty=1.0,
+                        w_shape=1.0,
                         w_com=1.0):
         weights = []
         probs = []
         self.prev_centroids.append(center_of_mass(self.prev_mask))
 
         for logits, pred_mask in zip(out_mask_logits, pred_masks):
-            prob = expit(logits)
             d = shifted_dice(pred_mask, self.prev_mask, self.prev_centroids, frame_rate)
             p = shape_penalty(pred_mask, self.prev_mask)
             com = center_of_mass_penalty(pred_mask, self.prev_centroids, frame_rate)
-            score = w_dice * d - w_penalty * p - w_com * com
+            score = w_dice * d - w_shape * p - w_com * com
 
             weights.append(score)
-            probs.append(prob)
+            probs.append(logits)
 
         weights = np.array(weights)
 
@@ -231,7 +231,8 @@ class DAM4SAMTracker():
             weights = np.ones_like(weights) / len(weights)
 
         # Weighted average of probability maps
-        final_prob = np.tensordot(weights, np.stack(probs, axis=0), axes=1)
+        final_logits = np.tensordot(weights, np.stack(probs, axis=0), axes=1)
+        final_prob = expit(final_logits)
         best_score = None
         best_mask = None
         for thresh in threshold_list:
@@ -239,13 +240,13 @@ class DAM4SAMTracker():
             d = shifted_dice(mask, self.prev_mask, self.prev_centroids, frame_rate)
             p = shape_penalty(mask, self.prev_mask)
             com = center_of_mass_penalty(mask, self.prev_centroids, frame_rate)
-            score = w_dice * d - w_penalty * p - w_com * com
+            score = w_dice * d - w_shape * p - w_com * com
             if best_score is None or score > best_score:
             # if score > best_score:
                 best_score = score
                 best_mask = mask
 
-        return best_mask
+        return best_mask, final_logits
 
     def compute_iou(self, mask1, mask2):
         """
@@ -280,6 +281,9 @@ class DAM4SAMTracker():
         # Propagate the tracking to the next frame
         # return_all_masks=True returns all predicted (chosen and alternative) masks and corresponding IoUs
         out_mask_logits = []
+        out_mask_logits_low_res = []
+        all_out_mask_logits = []
+        all_ious = []
         masks = []
         ious = []
         for i, p in zip(self.inference_states, self.predictors):
@@ -293,18 +297,26 @@ class DAM4SAMTracker():
             ).__next__()
             out_mask_logit = out[2]
             out_frame_idx = out[0]
-            ious.append(out[3][1].max())
+            ious.extend(out[3][1])
             out_mask_logit = out_mask_logit[0][0].float().cpu().numpy() # Extract the mask logits
             out_mask_logits.append(out_mask_logit)
+            all_out_mask_logits.extend([o[0][0].float().cpu().numpy() for o in out[3][0]])
+            all_ious.extend(list(out[3][1]))
             masks.append(out_mask_logit > 0)
-        m = self._ensemble_masks(out_mask_logits, masks, **self.ensembling_params)
+        m, logits = self._ensemble_masks(out_mask_logits, masks, **self.ensembling_params)
+        all_masks = [m > 0 for m in all_out_mask_logits]
+
         for i, p in zip(self.inference_states, self.predictors):
-            p.add_new_mask(
-            inference_state=i,
-            frame_idx=self.frame_index,
-            obj_id=0,
-            mask=m,
-            )
+            i['output_dict']['non_cond_frame_outputs'][self.frame_index]['n_pixels_pos'] = m.sum()
+            logits = F.resize(torch.as_tensor(logits[None, None], device=i['device']), size=p.image_size//4)
+            i['output_dict']['non_cond_frame_outputs'][self.frame_index]['pred_masks'] = logits
+            i['output_dict_per_obj'][0]['non_cond_frame_outputs'][self.frame_index]['n_pixels_pos'] = m.sum()
+            i['output_dict_per_obj'][0]['non_cond_frame_outputs'][self.frame_index]['pred_masks'] = logits
+            p._consolidate_temp_output_across_obj(i, self.frame_index,
+                                                  is_cond=False,
+                                                  run_mem_encoder=True,
+                                                  consolidate_at_video_res=False)
+
         # TODO woher kommt dieser wert eigentlich? können wir dafür irgendwo zwischen einen dice berechnen?  evtl prev frame?
         m_iou = np.mean(ious)
 
@@ -312,8 +324,8 @@ class DAM4SAMTracker():
         self.object_sizes.append(n_pixels)
         if len(self.object_sizes) > 1 and n_pixels >= 1:
             obj_sizes_ratio = n_pixels / np.median([
-                size for size in self.object_sizes[-10:] if size >= 1
-            ][-10:])
+                size for size in self.object_sizes[-5:] if size >= 1
+            ][-5:])
         else:
             obj_sizes_ratio = -1
 
@@ -334,7 +346,7 @@ class DAM4SAMTracker():
             alternative_masks = [
                 Mask(m_).rasterize((0, 0, self.img_width - 1, self.img_height - 1)).astype(
                     np.uint8)
-                for m_ in masks]
+                for m_ in all_masks]
 
             # Numpy array of the chosen mask and corresponding bounding box
             chosen_mask_np = m.copy()

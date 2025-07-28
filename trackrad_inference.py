@@ -1,9 +1,13 @@
+import json
+
 import numpy as np
 from dam4sam.dam4sam_tracker import DAM4SAMTracker
 from PIL import Image
 from tqdm import trange, tqdm
 import SimpleITK as sitk
 from pathlib import Path
+
+from inference_model import get_weight
 from processing import crop_to_bbox, pad_to_full_image, preprocess_stable, dice_score
 
 ROOT_PATH = Path('/mnt/d/trackrad2025_bad_labeled_training_data')
@@ -25,7 +29,7 @@ def _write_mha(path, img):
 if __name__ == '__main__':
     tbar = tqdm(list(ROOT_PATH.iterdir()))
     dices = []
-    multi_tracker = DAM4SAMTracker(tracker_names=['medsam2pp-T', 'sam21pp-T', 'sam21pp-S', 'sam21pp-B'],# 'sam21pp-L'],
+    multi_tracker = DAM4SAMTracker(tracker_names=['medsam2pp-T', 'sam21pp-T'],# 'sam21pp-S', 'sam21pp-B'],# 'sam21pp-L'],
                                    base_path=WEIGHT_PATH)
 
     for folder in tbar:
@@ -33,6 +37,7 @@ if __name__ == '__main__':
         image_path = (folder / 'images') / f'{case_name}_frames.mha'
         initial_mask_path = (folder / 'targets') / f'{case_name}_first_label.mha'
         targets_path = (folder / 'targets') / f'{case_name}_labels.mha'
+        frame_rate = json.load((folder / 'frame-rate.json').open())
         imgs = _load_mha(image_path)
         initial_mask = _load_mha(initial_mask_path)[..., 0]
 
@@ -50,13 +55,12 @@ if __name__ == '__main__':
 
         img_0 = np.repeat(img_0[None], 3, 0)
         multi_tracker.initialize(img_0, initial_mask,
-                                 spacing_mm=1.0,
-                                 is_lung=True,
-                                 ensembling_params=dict(w_dice=1.0,
-                                                        w_penalty=1.0,
-                                                        w_dose=1.0,
+                                 ensembling_params=dict(w_dice=get_weight(frame_rate),
+                                                        frame_rate=frame_rate,
+                                                        w_shape=1.0,
+                                                        w_com=0,
                                                         normalize=True,
-                                                        binarize_thresh=0.5))
+                                                        threshold_list=[0.5]))
 
         for i in trange(1, imgs.shape[-1]):
             img = preprocess_stable(imgs[..., i:i + 1])
