@@ -298,7 +298,13 @@ class DAM4SAMTracker():
             out_mask_logits.append(out_mask_logit)
             masks.append(out_mask_logit > 0)
         m = self._ensemble_masks(out_mask_logits, masks, **self.ensembling_params)
-
+        for i, p in zip(self.inference_states, self.predictors):
+            p.add_new_mask(
+            inference_state=i,
+            frame_idx=self.frame_index,
+            obj_id=0,
+            mask=m,
+            )
         # TODO woher kommt dieser wert eigentlich? können wir dafür irgendwo zwischen einen dice berechnen?  evtl prev frame?
         m_iou = np.mean(ious)
 
@@ -306,42 +312,89 @@ class DAM4SAMTracker():
         self.object_sizes.append(n_pixels)
         if len(self.object_sizes) > 1 and n_pixels >= 1:
             obj_sizes_ratio = n_pixels / np.median([
-                size for size in self.object_sizes[-20:] if size >= 1
+                size for size in self.object_sizes[-10:] if size >= 1
             ][-10:])
         else:
             obj_sizes_ratio = -1
 
-        if m_iou > 0.8 and obj_sizes_ratio >= 0.9 and obj_sizes_ratio <= 1.1 and n_pixels >= 1 and (self.frame_index - self.last_added > 5 or self.last_added == -1):
-            masks = [Mask(m_).rasterize((0, 0, self.img_width - 1, self.img_height - 1)).astype(np.uint8)
-                             for m_ in masks]
+        # The first condition checks if:
+        #  - the chosen predicted mask has a high predicted IoU,
+        #  - the object size ratio is within a +- 20% range compared to the previous frames,
+        #  - the target is present in the current frame,
+        #  - the last added frame to DRM is more than 5 frames ago or no frame has been added yet
+        # Numpy array of the chosen mask and corresponding bounding box
+        # self.all_masks.append(m)
+        # n_pixels_prev = (prev_mask == 1).sum()
+        # print(f'{n_pixels_prev=}; {n_pixels=}')
+        # if (n_pixels / n_pixels_prev) < 0.8 or (n_pixels / n_pixels_prev) > 1.2:
+        #     print('Using previous mask for current frame.')
+        #     m = prev_mask
+        if m_iou > 0.8 and obj_sizes_ratio >= 0.8 and obj_sizes_ratio <= 1.2 and n_pixels >= 1 and (
+                self.frame_index - self.last_added > 5 or self.last_added == -1):
+            alternative_masks = [
+                Mask(m_).rasterize((0, 0, self.img_width - 1, self.img_height - 1)).astype(
+                    np.uint8)
+                for m_ in masks]
 
+            # Numpy array of the chosen mask and corresponding bounding box
             chosen_mask_np = m.copy()
-            # chosen_bbox = Mask(chosen_mask_np).convert(RegionType.RECTANGLE)
+            chosen_bbox = Mask(chosen_mask_np).convert(RegionType.RECTANGLE)
 
             # Delete the parts of the alternative masks that overlap with the chosen mask
-            masks = [np.logical_and(m_, np.logical_not(chosen_mask_np)).astype(np.uint8) for m_ in masks]
+            alternative_masks = [np.logical_and(m_, np.logical_not(chosen_mask_np)).astype(np.uint8) for m_ in
+                                 alternative_masks]
             # Keep only the largest connected component of the processed alternative masks
-            masks = [keep_largest_component(m_) for m_ in masks if np.sum(m_) >= 1]
-            if len(masks) > 0:
+            alternative_masks = [keep_largest_component(m_) for m_ in alternative_masks if np.sum(m_) >= 1]
+            if len(alternative_masks) > 0:
                 # Make the union of the chosen mask and the processed alternative masks (corresponding to the largest connected component)
-                masks = [np.logical_or(m_, chosen_mask_np).astype(np.uint8) for m_ in masks]
-                out_all_dices = [dice_score(m, mask) for mask in masks]
-
+                alternative_masks = [np.logical_or(m_, chosen_mask_np).astype(np.uint8) for m_ in alternative_masks]
                 # Convert the processed alternative masks to bounding boxes to calculate the IoUs bounding box-wise
-                # alternative_bboxes = [Mask(m_).convert(RegionType.RECTANGLE) for m_ in alternative_masks]
+                alternative_bboxes = [Mask(m_).convert(RegionType.RECTANGLE) for m_ in alternative_masks]
                 # Calculate the IoUs between the chosen bounding box and the processed alternative bounding boxes
-                # ious = [calculate_overlaps([chosen_mask_np], [mask])[0] for mask in alternative_masks]
+                ious = [calculate_overlaps([chosen_bbox], [bbox])[0] for bbox in alternative_bboxes]
 
                 # The second condition checks if within the calculated IoUs, there is at least one IoU that is less than 0.7
                 # That would mean that there are significant differences between the chosen mask and the processed alternative masks,
                 # leading to possible detections of distractors within alternative masks.
-                if np.min(np.array(out_all_dices)) <= 0.8:
-                    self.last_added = self.frame_index # Update the last added frame index
-
-                    [p.add_to_drm(inference_state=i, frame_idx=out_frame_idx, obj_id=0,)
-                     for i, p in zip(self.inference_states, self.predictors)]
-            # Return the predicted mask for the current frame
-            # out_dict = {'pred_mask': m}
+                if np.min(np.array(ious)) <= 0.7:
+                    self.last_added = self.frame_index  # Update the last added frame index
+                    for p in self.predictors:
+                        p.add_to_drm(
+                            inference_state=self.inference_state,
+                            frame_idx=out_frame_idx,
+                            obj_id=0,
+                        )
+        # if m_iou > 0.8 and obj_sizes_ratio >= 0.9 and obj_sizes_ratio <= 1.1 and n_pixels >= 1 and (self.frame_index - self.last_added > 5 or self.last_added == -1):
+        #     masks = [Mask(m_).rasterize((0, 0, self.img_width - 1, self.img_height - 1)).astype(np.uint8)
+        #                      for m_ in masks]
+        #
+        #     chosen_mask_np = m.copy()
+        #     # chosen_bbox = Mask(chosen_mask_np).convert(RegionType.RECTANGLE)
+        #
+        #     # Delete the parts of the alternative masks that overlap with the chosen mask
+        #     masks = [np.logical_and(m_, np.logical_not(chosen_mask_np)).astype(np.uint8) for m_ in masks]
+        #     # Keep only the largest connected component of the processed alternative masks
+        #     masks = [keep_largest_component(m_) for m_ in masks if np.sum(m_) >= 1]
+        #     if len(masks) > 0:
+        #         # Make the union of the chosen mask and the processed alternative masks (corresponding to the largest connected component)
+        #         masks = [np.logical_or(m_, chosen_mask_np).astype(np.uint8) for m_ in masks]
+        #         out_all_dices = [dice_score(m, mask) for mask in masks]
+        #
+        #         # Convert the processed alternative masks to bounding boxes to calculate the IoUs bounding box-wise
+        #         # alternative_bboxes = [Mask(m_).convert(RegionType.RECTANGLE) for m_ in alternative_masks]
+        #         # Calculate the IoUs between the chosen bounding box and the processed alternative bounding boxes
+        #         # ious = [calculate_overlaps([chosen_mask_np], [mask])[0] for mask in alternative_masks]
+        #
+        #         # The second condition checks if within the calculated IoUs, there is at least one IoU that is less than 0.7
+        #         # That would mean that there are significant differences between the chosen mask and the processed alternative masks,
+        #         # leading to possible detections of distractors within alternative masks.
+        #         if np.min(np.array(out_all_dices)) <= 0.8:
+        #             self.last_added = self.frame_index # Update the last added frame index
+        #
+        #             [p.add_to_drm(inference_state=i, frame_idx=out_frame_idx, obj_id=0,)
+        #              for i, p in zip(self.inference_states, self.predictors)]
+        #     # Return the predicted mask for the current frame
+        #     # out_dict = {'pred_mask': m}
 
         self.prev_mask = m.copy()  # Update the previous mask for the next frame
         # TODO update the inference state with the current mask
