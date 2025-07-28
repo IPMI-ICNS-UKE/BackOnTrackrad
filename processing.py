@@ -139,7 +139,7 @@ def preprocess_stable(image, reference=None):
         image = match_histograms(image, reference, channel_axis=None)
 
     # 4. Convert to uint8 for downstream
-    return (255 * image).astype(np.uint8)
+    return image
 
 def get_mask_stats(mask):
     labeled = label(mask)
@@ -230,9 +230,7 @@ def compute_dose_penalty(gt_mask, pred_mask, spacing_mm=1.0, is_lung=True):
         return 1.0
     return (d98_gt - d98_shifted) / d98_gt  # relative D98% drop
 
-def ensemble(
-    img,
-    trackers,
+def predict(
     prev_mask,
     initial_mask,
     w_dice=1.0,
