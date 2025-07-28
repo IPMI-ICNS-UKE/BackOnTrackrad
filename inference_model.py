@@ -20,6 +20,14 @@ from skimage.measure import label, regionprops
 from scipy.special import expit
 import math
 
+from scipy.ndimage import binary_dilation, gaussian_filter, shift, center_of_mass
+from skimage.morphology import remove_small_objects
+from skimage.exposure import match_histograms
+from skimage.measure import label, regionprops
+from scipy.special import expit
+import math
+import numpy as np
+
 
 def pad_to_full_image(cropped, full_shape, bbox):
     """
@@ -150,211 +158,173 @@ def preprocess_stable(image, reference=None):
         image = match_histograms(image, reference, channel_axis=None)
 
     # 4. Convert to uint8 for downstream
-    return (255 * image).astype(np.uint8)
+    return image
+
 
 def get_mask_stats(mask):
-    labeled = label(mask)
-    props = regionprops(labeled)
+    props = regionprops(label(mask.astype(np.uint8)))
     if not props:
-        return None
-    region = props[0]
-    return {
-        "area": region.area,
-        "centroid": region.centroid,
-        "eccentricity": region.eccentricity
-    }
+        return {'area': 0, 'eccentricity': 0}
+    p = props[0]
+    return {'area': p.area, 'eccentricity': p.eccentricity}
 
-def shape_penalty(current_mask, initial_stats, area_tol=0.3, centroid_tol=20, ecc_tol=0.3):
-    current_stats = get_mask_stats(current_mask)
-    if current_stats is None:
-        return float('inf')  # completely reject
-    penalty = 0.0
+def shape_penalty(pred_mask, prev_mask):
+    """
+    Penalize differences in shape (area, eccentricity) between predicted and previous mask.
+    """
+    stats_pred = get_mask_stats(pred_mask)
+    stats_prev = get_mask_stats(prev_mask)
 
-    # Area
-    area_diff = abs(current_stats["area"] - initial_stats["area"]) / initial_stats["area"]
-    if area_diff > area_tol:
-        penalty += area_diff
+    if stats_pred['area'] == 0 or stats_prev['area'] == 0:
+        return 1.0  # heavy penalty for empty mask or missing shape
 
-    # Centroid
-    y0, x0 = initial_stats["centroid"]
-    y1, x1 = current_stats["centroid"]
-    dist = ((y1 - y0) ** 2 + (x1 - x0) ** 2) ** 0.5
-    if dist > centroid_tol:
-        penalty += dist / 10.0
+    area_diff = abs(stats_pred['area'] - stats_prev['area']) / stats_prev['area']
+    ecc_diff = abs(stats_pred['eccentricity'] - stats_prev['eccentricity'])
 
-    # Eccentricity
-    ecc_diff = abs(current_stats["eccentricity"] - initial_stats["eccentricity"])
-    if ecc_diff > ecc_tol:
-        penalty += ecc_diff
+    return area_diff + ecc_diff
 
+def com_distance_penalty(mask_a, mask_b):
+    """
+    Compute Euclidean distance between center of mass of two binary masks.
+    """
+    if mask_a.sum() == 0 or mask_b.sum() == 0:
+        return np.inf  # Invalid comparison
+    com_a = np.array(center_of_mass(mask_a))
+    com_b = np.array(center_of_mass(mask_b))
+    return np.linalg.norm(com_a - com_b)
+
+def center_of_mass_penalty(pred_mask, prev_centroids, frame_rate):
+    """
+    Penalizes the distance between predicted and expected CoM using 2nd-degree
+    polynomial fit over previous centroids.
+
+    Parameters:
+    - pred_mask: binary mask of current frame
+    - prev_centroids: list of previous CoMs as np.array([y, x])
+    - frame_rate: frames per second
+
+    Returns:
+    - penalty: Euclidean distance between predicted and extrapolated CoM
+    """
+    N = min(len(prev_centroids), int(np.floor(frame_rate)))
+    if N < 3:
+        return 0.0  # Not enough data to fit
+
+    dt = 1.0 / frame_rate
+    t = np.arange(-N + 1, 1) * dt  # e.g., [-0.875, ..., 0.0] for N=8
+
+    ys, xs = zip(*prev_centroids[-N:])  # use last N CoMs
+
+    # Fit 2nd-degree polynomial to y and x over time
+    coef_y = np.polyfit(t, ys, deg=2)
+    coef_x = np.polyfit(t, xs, deg=2)
+
+    # Predict CoM at next frame (t = dt)
+    t_next = dt
+    y_next = np.polyval(coef_y, t_next)
+    x_next = np.polyval(coef_x, t_next)
+
+    com_expected = np.array([y_next, x_next])
+
+    # Compute predicted CoM
+    if np.sum(pred_mask) == 0:
+        return 1e6  # large penalty for empty mask
+
+    com_pred = np.array(center_of_mass(pred_mask))
+    penalty = np.linalg.norm(com_pred - com_expected)
     return penalty
 
 
-def get_centroid(mask):
-    labeled = label(mask)
-    props = regionprops(labeled)
-    if not props:
-        return None
-    return props[0].centroid  # (y, x)
 
-
-def compute_dose_distribution(gt_mask, spacing_mm, is_lung=True):
-    # Step 1: Expand GTV by 3 mm → CTV
-    radius_voxels = int(np.round(3 / spacing_mm))  # Assuming isotropic spacing
-    expanded = binary_dilation(gt_mask, iterations=radius_voxels)
-
-    # Step 2: Gaussian smoothing
-    sigma_mm = 6 if is_lung else 4
-    sigma_voxels = sigma_mm / spacing_mm
-    dose = gaussian_filter(expanded.astype(np.float32), sigma=sigma_voxels)
-
-    return dose
-
-
-def compute_d98(dose, mask):
-    sorted_vals = np.sort(dose[mask > 0].ravel())
-    idx = int(np.ceil(0.02 * len(sorted_vals)))  # top 2% gets underdosed
-    return sorted_vals[idx] if len(sorted_vals) > idx else 0.0
-
-
-def compute_dose_penalty(gt_mask, pred_mask, spacing_mm=1.0, is_lung=True):
-    # Step 1: Get original dose distribution from GT mask
-    dose = compute_dose_distribution(gt_mask, spacing_mm, is_lung)
-
-    # Step 2: Get centroids
-    c_gt = get_centroid(gt_mask)
-    c_pred = get_centroid(pred_mask)
-    if c_gt is None or c_pred is None:
-        return 1.0  # Maximum penalty
-
-    shift_voxels = [c_gt[0] - c_pred[0], c_gt[1] - c_pred[1]]
-
-    # Step 3: Shift the dose distribution
-    shifted_dose = shift(dose, shift=shift_voxels, order=1, mode='nearest')
-
-    # Step 4: Compute D98% in GT region for both
-    d98_gt = compute_d98(dose, gt_mask)
-    d98_shifted = compute_d98(shifted_dose, gt_mask)
-
-    # Step 5: Return relative drop
-    if d98_gt == 0:
-        return 1.0
-    return (d98_gt - d98_shifted) / d98_gt  # relative D98% drop
-
-def ensemble(
-    img,
-    trackers,
-    prev_mask,
-    initial_mask,
-    w_dice=1.0,
-    w_penalty=1.0,
-    w_dose=0.5,
-    spacing_mm=1.0,
-    is_lung=True,
-    binarize_thresh=0.5,
-    normalize_scores=True
-):
+def shifted_dice(pred_mask, prev_mask, prev_centroids, frame_rate):
     """
-    Ensemble tracking predictions using weighted Dice, shape penalty, and dose penalty.
+    Computes the Dice score between the current prediction and the
+    motion-compensated previous mask using predicted CoM shift.
 
     Parameters:
-    - img: current input image
-    - trackers: list of tracker models (must implement `.track(img)` and return (pred_mask, logits))
+    - pred_mask: predicted binary mask (current frame)
     - prev_mask: binary mask from previous frame
-    - initial_mask: binary ground-truth mask from first frame
-    - w_dice, w_penalty, w_dose: weighting factors for Dice, shape, and dose penalties
-    - spacing_mm: voxel spacing for dose metric
-    - is_lung: whether the target is lung tissue (affects dose smoothing)
-    - binarize_thresh: threshold for final binary mask
-    - normalize_scores: whether to normalize weights to sum to 1
+    - prev_centroids: list of previous CoMs (as [y, x])
+    - frame_rate: current frame rate in fps
 
     Returns:
-    - final_mask: ensembled binary segmentation mask
+    - dice: float
     """
-    initial_stats = get_mask_stats(initial_mask)
-    out = [tracker.track(img) for tracker in trackers]
-    pred_masks, logits_list = zip(*out)
+    # Get predicted CoM of current frame
+    if np.sum(pred_mask) == 0 or np.sum(prev_mask) == 0:
+        return 0.0
 
-    weights = []
-    probs = []
+    com_pred = np.array(center_of_mass(pred_mask))
 
-    for logits, pred_mask in zip(logits_list, pred_masks):
-        prob = expit(logits)
-
-        d = dice_score(pred_mask, prev_mask)
-        p = shape_penalty(pred_mask, initial_stats)
-        dose = compute_dose_penalty(initial_mask, pred_mask, spacing_mm, is_lung)
-
-        score = w_dice * d - w_penalty * p - w_dose * dose
-
-        weights.append(score)
-        probs.append(prob)
-
-    weights = np.array(weights)
-
-    # Remove extremely bad predictions (optional)
-    weights[weights < 0] = 0
-
-    if normalize_scores and weights.sum() > 0:
-        weights = weights / weights.sum()
+    # Predict next CoM from history
+    N = min(len(prev_centroids), int(np.floor(frame_rate)))
+    if N < 3:
+        # Fallback: use last displacement
+        delta = com_pred - prev_centroids[-1]
     else:
-        weights = np.ones_like(weights) / len(weights)
+        dt = 1.0 / frame_rate
+        t = np.arange(-N + 1, 1) * dt
+        ys, xs = zip(*prev_centroids[-N:])
 
-    # Weighted average of probability maps
-    final_prob = np.tensordot(weights, np.stack(probs, axis=0), axes=1)
-    final_mask = (final_prob > binarize_thresh).astype(np.uint8)
+        coef_y = np.polyfit(t, ys, deg=2)
+        coef_x = np.polyfit(t, xs, deg=2)
 
-    return final_mask
+        t_next = dt
+        y_next = np.polyval(coef_y, t_next)
+        x_next = np.polyval(coef_x, t_next)
+        com_expected = np.array([y_next, x_next])
 
+        delta = com_expected - prev_centroids[-1]  # shift to expected location
 
-def dice_score(pred, gt, smooth=1e-6):
-    intersection = np.logical_and(pred, gt).sum()
-    dice = (2. * intersection + smooth) / (pred.sum() + gt.sum() + smooth)
-    return dice
+    # Shift previous mask by delta (opposite direction)
+    shifted_prev = shift(prev_mask.astype(float), shift=delta, order=0, mode='constant')
+
+    # Compute Dice between shifted previous and current prediction
+    intersection = np.sum((pred_mask > 0.5) * (shifted_prev > 0.5))
+    union = np.sum(pred_mask > 0.5) + np.sum(shifted_prev > 0.5)
+    if union == 0:
+        return 1.0  # both empty
+    return 2.0 * intersection / union
+
+def get_weight(frame_rate):
+    FR_min, FR_max = 1.0, 8.0
+    scale = (frame_rate - FR_min) / (FR_max - FR_min)
+    scale = np.clip(scale, 0, 1)
+    w_dice = 1.0 * (1.0 + scale)  # from 1.0 to 2.0
+    return w_dice
 
 RESOURCE_PATH = Path("resources")  # load weights and other resources from this directory
-
+RESOURCE_PATH = '/home/tsentker/Documents/BackOnTrackrad/weights/'
 
 def run_algorithm(frames: np.ndarray, target: np.ndarray, frame_rate: float, magnetic_field_strength: float, scanned_region: str) -> np.ndarray:
-    tracker_t = DAM4SAMTracker('sam21pp-T', base_path=RESOURCE_PATH)
-    tracker_s = DAM4SAMTracker('sam21pp-S', base_path=RESOURCE_PATH)
-    tracker_b = DAM4SAMTracker('sam21pp-B', base_path=RESOURCE_PATH)
-    tracker_l = DAM4SAMTracker('sam21pp-L', base_path=RESOURCE_PATH)
+    multi_tracker = DAM4SAMTracker(tracker_names=['sam21pp-T', 'sam21pp-S', 'sam21pp-B', 'sam21pp-L'],
+                                   base_path=RESOURCE_PATH)
 
     initial_mask = target[..., 0]
     tracked_masks = [initial_mask]
     initial_shape = frames.shape[:2]
 
-    initial_frame, initial_mask, bbox = crop_to_bbox(image=frames[..., 0:1], mask=initial_mask, bbox=None, margin=50,
+    initial_frame, initial_mask, bbox = crop_to_bbox(image=frames[..., 0], mask=initial_mask, bbox=None, margin=50,
                                              size_multiple=256)
     initial_frame = preprocess_stable(initial_frame)
 
+    initial_frame = np.repeat(initial_frame[None], 3, 0)
 
-    initial_frame = Image.fromarray(np.repeat(initial_frame, 3, -1), mode='RGB')
+    multi_tracker.initialize(initial_frame, initial_mask,
+                             ensembling_params=dict(w_dice=get_weight(frame_rate),
+                                                    w_penalty=1.0,
+                                                    w_com=get_weight(frame_rate),
+                                                    frame_rate=frame_rate,
+                                                    normalize=True,
+                                                    threshold_list=[0.4, 0.45, 0.5, 0.55, 0.6]))
 
-    tracker_t.initialize(initial_frame, initial_mask)
-    tracker_s.initialize(initial_frame, initial_mask)
-    tracker_b.initialize(initial_frame, initial_mask)
-    tracker_l.initialize(initial_frame, initial_mask)
-
-    trackers = [tracker_t, tracker_s, tracker_b, tracker_l]
     for i in range(1, frames.shape[-1]):
-        frame, _, _ = crop_to_bbox(image=frames[..., i:i + 1], mask=None, bbox=bbox)
+        frame, _, _ = crop_to_bbox(image=frames[..., i], mask=None, bbox=bbox)
         frame = preprocess_stable(frame)
-        frame = Image.fromarray(np.repeat(frame[..., None], 3, -1), mode='RGB')
+        frame = np.repeat(frame[None], 3, 0)
 
-        prev_mask, _, _ = crop_to_bbox(image=tracked_masks[-1], mask=None, bbox=bbox)
-
-        selected_mask = ensemble(
-            frame,
-            trackers,
-            prev_mask,
-            initial_mask,
-            w_dice=1.0,
-            w_penalty=2.0,
-            w_dose=0.1,
-            is_lung=True if 'lung' in scanned_region else False,
-        )
+        selected_mask = multi_tracker.track(frame)
+        selected_mask = pad_to_full_image(selected_mask, initial_shape, bbox)
 
         selected_mask = pad_to_full_image(selected_mask, initial_shape, bbox)
         tracked_masks.append(selected_mask)

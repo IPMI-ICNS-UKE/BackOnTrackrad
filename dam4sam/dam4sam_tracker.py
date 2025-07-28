@@ -6,12 +6,13 @@ from hydra import compose
 import torch
 import torchvision.transforms.functional as F
 from scipy.special import expit
+from scipy.ndimage import center_of_mass
 
 from vot.region.raster import calculate_overlaps
 from vot.region.shapes import Mask
 from vot.region import RegionType
 
-from processing import dice_score, get_mask_stats, shape_penalty, compute_dose_penalty
+from processing import dice_score, get_mask_stats, shape_penalty, center_of_mass_penalty, shifted_dice
 from sam2.build_sam import build_sam2_video_predictor
 from collections import OrderedDict
 import random
@@ -130,7 +131,7 @@ class DAM4SAMTracker():
         return inference_state
     
     @torch.inference_mode()
-    def initialize(self, image, init_mask, bbox=None, spacing_mm=1.0, is_lung=True, ensembling_params=None):
+    def initialize(self, image, init_mask, bbox=None, ensembling_params=None):
         """
         Initialize the tracker with the first frame and mask.
         Function builds the DAM4SAM (2.1) tracker and initializes it with the first frame and mask.
@@ -146,10 +147,9 @@ class DAM4SAMTracker():
             init_mask = init_mask[0]
         self.initial_stats = get_mask_stats(init_mask)
         self.init_mask = init_mask
-        self.spacing = spacing_mm
-        self.is_lung = is_lung
         self.ensembling_params = ensembling_params
         self.prev_mask = init_mask
+        self.prev_centroids = []
         self.frame_index = 0 # Current frame index, updated frame-by-frame
         self.object_sizes = [] # List to store object sizes (number of pixels)
         self.all_masks = []
@@ -201,20 +201,21 @@ class DAM4SAMTracker():
     def _ensemble_masks(self, out_mask_logits,
                         pred_masks,
                         normalize=True,
-                        binarize_thresh=0.5,
+                        threshold_list=[0.45, 0.5, 0.66],
                         w_dice=1.0,
+                        frame_rate=1,
                         w_penalty=1.0,
-                        w_dose=1.0):
+                        w_com=1.0):
         weights = []
         probs = []
+        self.prev_centroids.append(center_of_mass(self.prev_mask))
 
         for logits, pred_mask in zip(out_mask_logits, pred_masks):
             prob = expit(logits)
-
-            d = dice_score(pred_mask, self.prev_mask)
-            p = shape_penalty(pred_mask, self.initial_stats)
-            dose = compute_dose_penalty(self.init_mask, pred_mask, self.spacing, self.is_lung)
-            score = w_dice * d - w_penalty * p - w_dose * dose
+            d = shifted_dice(pred_mask, self.prev_mask, self.prev_centroids, frame_rate)
+            p = shape_penalty(pred_mask, self.prev_mask)
+            com = center_of_mass_penalty(pred_mask, self.prev_centroids, frame_rate)
+            score = w_dice * d - w_penalty * p - w_com * com
 
             weights.append(score)
             probs.append(prob)
@@ -231,9 +232,20 @@ class DAM4SAMTracker():
 
         # Weighted average of probability maps
         final_prob = np.tensordot(weights, np.stack(probs, axis=0), axes=1)
-        final_mask = (final_prob > binarize_thresh)
+        best_score = None
+        best_mask = None
+        for thresh in threshold_list:
+            mask = (final_prob > thresh).astype(np.uint8)
+            d = shifted_dice(mask, self.prev_mask, self.prev_centroids, frame_rate)
+            p = shape_penalty(mask, self.prev_mask)
+            com = center_of_mass_penalty(mask, self.prev_centroids, frame_rate)
+            score = w_dice * d - w_penalty * p - w_com * com
+            if best_score is None or score > best_score:
+            # if score > best_score:
+                best_score = score
+                best_mask = mask
 
-        return final_mask
+        return best_mask
 
     def compute_iou(self, mask1, mask2):
         """
@@ -251,7 +263,7 @@ class DAM4SAMTracker():
         Function to track the object in the next frame.
 
         Args:
-        - image (PIL Image): Next frame of the video.
+        - image (numpy array): Next frame of the video.
         - init (bool): Whether the current frame is the initialization frame.
 
         Returns:
@@ -286,27 +298,9 @@ class DAM4SAMTracker():
             out_mask_logits.append(out_mask_logit)
             masks.append(out_mask_logit > 0)
         m = self._ensemble_masks(out_mask_logits, masks, **self.ensembling_params)
+
         # TODO woher kommt dieser wert eigentlich? können wir dafür irgendwo zwischen einen dice berechnen?  evtl prev frame?
         m_iou = np.mean(ious)
-
-
-        # for out in self.predictor.propagate_in_video(self.inference_state, start_frame_idx=self.frame_index, max_frame_num_to_track=0, return_all_masks=True):
-            # if len(out) == 3:
-            #     # There are 3 outputs when the tracking is done on the initialization frame
-            #     out_frame_idx, _, out_mask_logits = out
-            #     m = (out_mask_logits[0][0] > 0.0).float().cpu().numpy().astype(np.uint8)
-            # else:
-                # There are 4 outputs when the tracking is done on a non-initialization frame
-                # alternative_masks_ious is a tuple containing chosen and alternative masks and corresponding predicted IoUs
-        # out_frame_idx, _, out_mask_logits, alternative_masks_ious = out
-        # m = (out_mask_logits[0][0] > 0.0).float().cpu().numpy().astype(np.uint8)
-
-        # alternative_masks, out_all_ious = alternative_masks_ious # Extract all predicted masks (chosen and alternatives) and IoUs
-        # m_idx = np.argmax(out_all_ious) # Index of the chosen predicted mask
-        # m_iou = out_all_ious[m_idx] # Predicted IoU of the chosen predicted mask
-        # Delete the chosen predicted mask from the list of all predicted masks, leading to only alternative masks
-        # alternative_masks = [mask for i, mask in enumerate(alternative_masks) if i != m_idx]
-        # Determine if the object ratio between the current frame and the previous frames is within a certain range
 
         n_pixels = (m == 1).sum()
         self.object_sizes.append(n_pixels)
@@ -316,18 +310,6 @@ class DAM4SAMTracker():
             ][-10:])
         else:
             obj_sizes_ratio = -1
-        # The first condition checks if:
-        #  - the chosen predicted mask has a high predicted IoU,
-        #  - the object size ratio is within a +- 20% range compared to the previous frames,
-        #  - the target is present in the current frame,
-        #  - the last added frame to DRM is more than 5 frames ago or no frame has been added yet
-        # Numpy array of the chosen mask and corresponding bounding box
-        # self.all_masks.append(m)
-        # n_pixels_prev = (prev_mask == 1).sum()
-        # print(f'{n_pixels_prev=}; {n_pixels=}')
-        # if (n_pixels / n_pixels_prev) < 0.8 or (n_pixels / n_pixels_prev) > 1.2:
-        #     print('Using previous mask for current frame.')
-        #     m = prev_mask
 
         if m_iou > 0.8 and obj_sizes_ratio >= 0.9 and obj_sizes_ratio <= 1.1 and n_pixels >= 1 and (self.frame_index - self.last_added > 5 or self.last_added == -1):
             masks = [Mask(m_).rasterize((0, 0, self.img_width - 1, self.img_height - 1)).astype(np.uint8)
