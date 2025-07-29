@@ -45,7 +45,7 @@ class SAM2VideoPredictor(SAM2Base):
     @torch.inference_mode()
     def init_state(
         self,
-        video_path,
+        init_frame,
         offload_video_to_cpu=False,
         offload_state_to_cpu=False,
         async_loading_frames=False,
@@ -54,23 +54,14 @@ class SAM2VideoPredictor(SAM2Base):
         """Initialize an inference state."""
         # read the video / images & backbone frame0
         compute_device = self.device  # device of the model
-        images, video_height, video_width = load_video_frames(
-            video_path=video_path,
-            image_size=self.image_size,
-            offload_video_to_cpu=offload_video_to_cpu,
-            async_loading_frames=async_loading_frames,
-            compute_device=compute_device,
-            reverse=reverse
-        )
         inference_state = {}
         #add for point tracker 
         inference_state["mem_indx"] = [0]
         inference_state["valid_mask_indx"] = [0]
         inference_state["reset_cot_indx"] = [0]
         inference_state['reset_cot_ct'] = 0
-
-        inference_state["images"] = images
-        inference_state["num_frames"] = len(images)
+        inference_state['images'] = {0: init_frame}
+        inference_state["num_frames"] = 1
         # whether to offload the video frames to CPU memory
         # turning on this option saves the GPU memory with only a very small overhead
         inference_state["offload_video_to_cpu"] = offload_video_to_cpu
@@ -80,8 +71,8 @@ class SAM2VideoPredictor(SAM2Base):
         # and from 24 to 21 when tracking two objects)
         inference_state["offload_state_to_cpu"] = offload_state_to_cpu
         # the original video height and width, used for resizing final output scores
-        inference_state["video_height"] = video_height
-        inference_state["video_width"] = video_width
+        inference_state["video_height"] = init_frame.shape[-1]
+        inference_state["video_width"] = init_frame.shape[-2]
         inference_state["device"] = compute_device
         if offload_state_to_cpu:
             inference_state["storage_device"] = torch.device("cpu")

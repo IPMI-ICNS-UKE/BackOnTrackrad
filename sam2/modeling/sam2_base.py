@@ -334,7 +334,8 @@ class SAM2Base(torch.nn.Module):
                 checkpoint=None,box_iou=True,
                 frame_far=self.rvcot_frame_far,
                 mirrow_padding=self.rvcot_rvcot_mirrow_padding,
-                iouweight=self.rvcot_predict_iouweight)
+                iouweight=self.rvcot_predict_iouweight,
+                img_size=image_size)
 
         print(f"\033[93mKF mode: {self.kf_mode}\033[0m")
         print(f"\033[93mRVCOT mode: {self.rvcot_mode} with KF TRUE \033[0m")

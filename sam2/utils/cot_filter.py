@@ -66,6 +66,7 @@ class RVCotFilter():
                  mirrow_padding=False,
                  frame_far = 5,
                  iouweight = 0.5,
+                 img_size = 1024,
                  **args):
         
         # initialize cotracker3 using torch.hub
@@ -76,15 +77,15 @@ class RVCotFilter():
         self.device = device
         self.mirrow_padding = mirrow_padding
         # pre-make the grid 
-        grid_size = 1024
+        grid_size = img_size
         x = torch.linspace(0, grid_size, grid_size)
         y = torch.linspace(0, grid_size, grid_size)
         xx, yy = torch.meshgrid(x, y, indexing="ij")
         self.positions = torch.stack([yy.ravel(), xx.ravel()], dim=1).to(self.device)
         
         self.max_pre_iou = -1
-
-        h, w = 1024,1024
+        self.img_size = img_size
+        h, w = img_size,img_size
         grid_x, grid_y = torch.meshgrid(
             torch.arange(0, w, 4, device=device),
             torch.arange(0, h, 4, device=device),
@@ -136,8 +137,8 @@ class RVCotFilter():
             return torch.zeros([3]).to(self.device) # TODO 
         #### debug
         x, y = points[:, 1].int(), points[:, 2].int()
-        x.clamp_(0, 1023)
-        y.clamp_(0, 1023)
+        x.clamp_(0, self.img_size - 1)
+        y.clamp_(0, self.img_size - 1)
         points_mask_mapping = torch.stack([cur_masks_bin[0][0][y, x], 
                                         cur_masks_bin[1][0][y, x],
                                         cur_masks_bin[2][0][y,x]], dim=1)
@@ -157,7 +158,7 @@ class RVCotFilter():
             his_mask = his_mask.to(self.device)
             his_mask =  torch.nn.functional.interpolate(
                 his_mask,
-                size=(1024, 1024),
+                size=(self.img_size, self.img_size),
                 align_corners=False,
                 mode="bilinear",
                 antialias=True,  # use antialias for downsampling
@@ -382,7 +383,7 @@ class RVCotFilter():
         selected_points[idx_expanded_mask] = 0.0
         return selected_points
     
-    def iou_score_point_mask(self, pred_tracks, pred_visibility, historical_masks,points_mask_mapping,
+    def iou_score_point_mask(self, pred_tracks, pred_visibility, historical_masks, points_mask_mapping,
                               only_visible=True, bw=None, ):
         # return a list of score
         
@@ -397,7 +398,7 @@ class RVCotFilter():
             for t in range(len(historical_masks)):
                 validpoints = pred_visibility[0,t,:] & points_mask_mapping[:,i] # viliad flag at time t, proposal i-th
                 if  validpoints.sum()<10:
-                    conf_mask = torch.zeros([1024,1024]).to(device=self.device)
+                    conf_mask = torch.zeros([self.img_size,self.img_size]).to(device=self.device)
                 else:
                     if not self.mirrow_padding:
                         cur_pred_tracks = pred_tracks[0,t,:,:][validpoints.bool()]
@@ -417,7 +418,7 @@ class RVCotFilter():
     
         kde = torch_GaussianKDE(points,bandwidth=bandwidth)
         # Evaluate density
-        grid_size=1024
+        grid_size=self.img_size
         
         density = kde.evaluate(self.positions)
 
@@ -426,7 +427,7 @@ class RVCotFilter():
         thred = density[density>0].mean() +2*density[density>0].std()
         density = torch.clip(density,0, thred)
         density = density/density.max()
-        return torch.tensor(density).to(self.device)
+        return density.to(self.device)
 
     def nonbinary_iou(self, mask1, mask2,):       
         # similar to dice loss:
@@ -435,7 +436,7 @@ class RVCotFilter():
         box_iou = self.box_iou
         mask1[mask1<0.4]=0
 
-        mask2 = torch.tensor(mask2)
+        mask2 = torch.as_tensor(mask2)
         mask2[mask2<0.15]=0
         if mask2.sum() < 0.1:
             return 0
@@ -453,7 +454,7 @@ class RVCotFilter():
         if box_iou:
         # Calculate bounding boxes
             def get_bounding_box(mask):
-                mask = mask.view(1024, 1024)
+                mask = mask.view(self.img_size, self.img_size)
 
                 non_zero_indices = torch.argwhere(mask> 0.1)
                     #有效mask

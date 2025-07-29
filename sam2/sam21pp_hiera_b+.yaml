@@ -119,3 +119,29 @@ model:
   memory_temporal_stride_for_eval: 5 # memory stride in the RAM
   non_overlap_masks: false
   max_cond_frames_in_attn: 4 # number of elements in the DRM
+    
+  # KF
+  kf_mode: False
+  stable_frames_threshold: 15
+  stable_ious_threshold: 0.3
+  min_obj_score_logits: -1
+  kf_score_weight: 0.15
+  memory_bank_iou_threshold: 0.5
+  memory_bank_obj_score_threshold: 0.0
+  memory_bank_kf_score_threshold: 0.0
+  #rvcot
+  rvcot_mode: True
+  rvcot_weight: 0.25
+  rvcot_ious_threshold: 0.8 #rvcot:kf_weghted_iou低则用rvcot select
+  memory_bank_rvcot_iou_threshold: 0.5
+  rvcot_frame_far: 5
+  rvcot_iou_aggregation_method: 'farest'
+  rvcot_mem_selection: true
+  rvcot_mem_sel_intv: 15
+  rvcot_mem_long_len: 1
+  #  rvcot_mem_sel_ram_intv: 5
+  rvcot_mem_selection_method: 'hdf_dist'
+  rvcot_mem_sel_intioutred: 0.7
+  rvcot_siou_ratio_threshold: 1.5
+  rvcot_mem_sel_hsf_thred_ratio: 2.0
+  rvcot_predict_iouweight: 0.7
