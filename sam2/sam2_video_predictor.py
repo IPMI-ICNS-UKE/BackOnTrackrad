@@ -580,12 +580,15 @@ class SAM2VideoPredictor(SAM2Base):
                 consolidated_pred_masks[obj_idx : obj_idx + 1] = obj_mask
             else:
                 # Resize first if temporary object mask has a different resolution
-                resized_obj_mask = torch.nn.functional.interpolate(
-                    obj_mask,
-                    size=consolidated_pred_masks.shape[-2:],
-                    mode="bilinear",
-                    align_corners=False,
-                )
+                try:
+                    resized_obj_mask = torch.nn.functional.interpolate(
+                        obj_mask,
+                        size=consolidated_pred_masks.shape[-2:],
+                        mode="bilinear",
+                        align_corners=False,
+                    )
+                except:
+                    pass
                 consolidated_pred_masks[obj_idx : obj_idx + 1] = resized_obj_mask
             consolidated_out["obj_ptr"][obj_idx : obj_idx + 1] = out["obj_ptr"]
             consolidated_out["object_score_logits"][obj_idx : obj_idx + 1] = out[
@@ -798,6 +801,7 @@ class SAM2VideoPredictor(SAM2Base):
                     mask_inputs=None,
                     reverse=reverse,
                     run_mem_encoder=True,
+                    prev_sam_mask_logits=None,
                 )
 
                 output_dict[storage_key][frame_idx] = current_out
