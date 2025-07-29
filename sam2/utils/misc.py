@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from PIL import Image
 from tqdm import tqdm
-
+from time import sleep
 
 def get_sdpa_settings():
     if torch.cuda.is_available():
@@ -136,7 +136,7 @@ class AsyncVideoFrameLoader:
         # load the rest of frames asynchronously without blocking the session start
         def _load_frames():
             try:
-                for n in tqdm(range(len(self.images)), desc="frame loading (JPEG)"):
+                for n in tqdm(range(len(self.images)), desc="frame loading (JPEG)",disable=True):
                     self.__getitem__(n)
             except Exception as e:
                 self.exception = e
@@ -162,7 +162,9 @@ class AsyncVideoFrameLoader:
         img /= self.img_std
         if not self.offload_video_to_cpu:
             img = img.to(self.compute_device, non_blocking=True)
-        self.images[index] = img
+        # self.images[index] = img
+        # lower the cpu occupancy
+        # sleep(0.01)
         return img
 
     def __len__(self):
@@ -177,6 +179,7 @@ def load_video_frames(
     img_std=(0.229, 0.224, 0.225),
     async_loading_frames=False,
     compute_device=torch.device("cuda"),
+    reverse=False
 ):
     """
     Load the video frames from video_path. The frames are resized to image_size as in
@@ -203,6 +206,7 @@ def load_video_frames(
             img_std=img_std,
             async_loading_frames=async_loading_frames,
             compute_device=compute_device,
+            reverse = reverse
         )
     else:
         raise NotImplementedError(
@@ -218,6 +222,7 @@ def load_video_frames_from_jpg_images(
     img_std=(0.229, 0.224, 0.225),
     async_loading_frames=False,
     compute_device=torch.device("cuda"),
+    reverse=False
 ):
     """
     Load the video frames from a directory of JPEG files ("<frame_index>.jpg" format).
@@ -246,6 +251,9 @@ def load_video_frames_from_jpg_images(
         if os.path.splitext(p)[-1] in [".jpg", ".jpeg", ".JPG", ".JPEG"]
     ]
     frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
+    if reverse:
+        print('load in reverse order')
+        frame_names = frame_names[::-1]
     num_frames = len(frame_names)
     if num_frames == 0:
         raise RuntimeError(f"no images found in {jpg_folder}")
@@ -265,7 +273,7 @@ def load_video_frames_from_jpg_images(
         return lazy_images, lazy_images.video_height, lazy_images.video_width
 
     images = torch.zeros(num_frames, 3, image_size, image_size, dtype=torch.float32)
-    for n, img_path in enumerate(tqdm(img_paths, desc="frame loading (JPEG)")):
+    for n, img_path in enumerate(tqdm(img_paths, desc="frame loading (JPEG)",disable=True)):
         images[n], video_height, video_width = _load_img_as_tensor(img_path, image_size)
     if not offload_video_to_cpu:
         images = images.to(compute_device)
@@ -335,7 +343,6 @@ def fill_holes_in_mask_scores(mask, max_area):
         )
         mask = input_mask
 
-    mask = input_mask
     return mask
 
 

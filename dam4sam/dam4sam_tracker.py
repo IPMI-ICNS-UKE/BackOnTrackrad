@@ -273,7 +273,7 @@ class DAM4SAMTracker():
         # TODO autocast?!
         torch.cuda.empty_cache()
         # Prepare the image for input to the model
-        prepared_img = self._prepare_image(image).unsqueeze(0)
+        prepared_img = self._prepare_image(image)#.unsqueeze(0)
         if not init:
             self.frame_index += 1
             for i in self.inference_states:
@@ -293,8 +293,9 @@ class DAM4SAMTracker():
                 inference_state=i,
                 start_frame_idx=self.frame_index,
                 max_frame_num_to_track=0,
-                return_all_masks=True
             ).__next__()
+                # return_all_masks=True
+
             out_mask_logit = out[2]
             out_frame_idx = out[0]
             ious.extend(out[3][1])

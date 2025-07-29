@@ -25,6 +25,9 @@ class PositionEmbeddingSine(nn.Module):
         temperature: int = 10000,
         normalize: bool = True,
         scale: Optional[float] = None,
+        warmup_cache: bool = True,
+        image_size: int = 1024,
+        strides: Tuple[int] = (4, 8, 16, 32),
     ):
         super().__init__()
         assert num_pos_feats % 2 == 0, "Expecting even model width"
@@ -38,6 +41,12 @@ class PositionEmbeddingSine(nn.Module):
         self.scale = scale
 
         self.cache = {}
+        if warmup_cache and torch.cuda.is_available():
+            # Warmup cache for cuda, to help with compilation
+            device = torch.device("cuda")
+            for stride in strides:
+                cache_key = (image_size // stride, image_size // stride)
+                self._pe(1, device, *cache_key)
 
     def _encode_xy(self, x, y):
         # The positions are expected to be normalized
@@ -73,6 +82,43 @@ class PositionEmbeddingSine(nn.Module):
         pos_x, pos_y = self._encode_xy(x.flatten(), y.flatten())
         pos_x, pos_y = pos_x.reshape(bx, nx, -1), pos_y.reshape(by, ny, -1)
         pos = torch.cat((pos_y, pos_x, labels[:, :, None]), dim=2)
+        return pos
+        
+    @torch.no_grad()
+    def _pe(self, B, device, *cache_key):
+        H, W = cache_key
+        if cache_key in self.cache:
+            return self.cache[cache_key].to(device)[None].repeat(B, 1, 1, 1)
+
+        y_embed = (
+            torch.arange(1, H + 1, dtype=torch.float32, device=device)
+            .view(1, -1, 1)
+            .repeat(B, 1, W)
+        )
+        x_embed = (
+            torch.arange(1, W + 1, dtype=torch.float32, device=device)
+            .view(1, 1, -1)
+            .repeat(B, H, 1)
+        )
+
+        if self.normalize:
+            eps = 1e-6
+            y_embed = y_embed / (y_embed[:, -1:, :] + eps) * self.scale
+            x_embed = x_embed / (x_embed[:, :, -1:] + eps) * self.scale
+
+        dim_t = torch.arange(self.num_pos_feats, dtype=torch.float32, device=device)
+        dim_t = self.temperature ** (2 * (dim_t // 2) / self.num_pos_feats)
+
+        pos_x = x_embed[:, :, :, None] / dim_t
+        pos_y = y_embed[:, :, :, None] / dim_t
+        pos_x = torch.stack(
+            (pos_x[:, :, :, 0::2].sin(), pos_x[:, :, :, 1::2].cos()), dim=4
+        ).flatten(3)
+        pos_y = torch.stack(
+            (pos_y[:, :, :, 0::2].sin(), pos_y[:, :, :, 1::2].cos()), dim=4
+        ).flatten(3)
+        pos = torch.cat((pos_y, pos_x), dim=3).permute(0, 3, 1, 2)
+        self.cache[cache_key] = pos[0]
         return pos
 
     @torch.no_grad()

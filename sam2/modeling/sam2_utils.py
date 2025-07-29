@@ -29,27 +29,35 @@ def select_closest_cond_frames(frame_idx, cond_frame_outputs, max_cond_frame_num
     - selected_outputs: selected items (keys & values) from `cond_frame_outputs`.
     - unselected_outputs: items (keys & values) not selected in `cond_frame_outputs`.
     """
-    selected_outputs = {}
+    if max_cond_frame_num == -1 or len(cond_frame_outputs) <= max_cond_frame_num:
+        selected_outputs = cond_frame_outputs
+        unselected_outputs = {}
+    else:
+        assert max_cond_frame_num >= 2, "we should allow using 2+ conditioning frames"
+        selected_outputs = {}
 
-    # the closest conditioning frame before `frame_idx - 1` (if any)
-    # We possibly exclude frame_idx - 1 from the DRM part of memory as it should always be in RAM part of memory.
-    idx_before = max((t for t in cond_frame_outputs if t < frame_idx - 1), default=None)
-    if idx_before is not None and idx_before >= 0:
-        selected_outputs[idx_before] = cond_frame_outputs[idx_before]
+        # the closest conditioning frame before `frame_idx` (if any)
+        idx_before = max((t for t in cond_frame_outputs if t < frame_idx), default=None)
+        if idx_before is not None:
+            selected_outputs[idx_before] = cond_frame_outputs[idx_before]
 
-    if 0 not in selected_outputs:
-        selected_outputs[0] = cond_frame_outputs[0]
-    
-    num_remain = max_cond_frame_num - len(selected_outputs)
-    inds_remain = sorted(
-        (t for t in cond_frame_outputs if (t not in selected_outputs and t != frame_idx - 1)),
-        key=lambda x: abs(x - frame_idx),
-    )[:num_remain]
-    selected_outputs.update((t, cond_frame_outputs[t]) for t in inds_remain)
-    unselected_outputs = {
-        t: v for t, v in cond_frame_outputs.items() if t not in selected_outputs
-    }
-    
+        # the closest conditioning frame after `frame_idx` (if any)
+        idx_after = min((t for t in cond_frame_outputs if t >= frame_idx), default=None)
+        if idx_after is not None:
+            selected_outputs[idx_after] = cond_frame_outputs[idx_after]
+
+        # add other temporally closest conditioning frames until reaching a total
+        # of `max_cond_frame_num` conditioning frames.
+        num_remain = max_cond_frame_num - len(selected_outputs)
+        inds_remain = sorted(
+            (t for t in cond_frame_outputs if t not in selected_outputs),
+            key=lambda x: abs(x - frame_idx),
+        )[:num_remain]
+        selected_outputs.update((t, cond_frame_outputs[t]) for t in inds_remain)
+        unselected_outputs = {
+            t: v for t, v in cond_frame_outputs.items() if t not in selected_outputs
+        }
+
     return selected_outputs, unselected_outputs
 
 

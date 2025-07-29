@@ -63,7 +63,8 @@ class MemoryAttentionLayer(nn.Module):
         tgt = tgt + self.dropout1(tgt2)
         return tgt
 
-    def _forward_ca(self, tgt, memory, query_pos, pos, num_k_exclude_rope=0):
+    def _forward_ca(self, tgt, memory, query_pos, pos, num_k_exclude_rope=0,
+                    object_frame_scores=None, object_ptr_scores=None):
         kwds = {}
         if num_k_exclude_rope > 0:
             assert isinstance(self.cross_attn_image, RoPEAttention)
@@ -71,9 +72,41 @@ class MemoryAttentionLayer(nn.Module):
 
         # Cross-Attention
         tgt2 = self.norm2(tgt)
+        # if object_frame_scores is None: 
+        if True:
+            key = memory + pos if self.pos_enc_at_cross_attn_keys else memory
+        else: # relative
+            key_original = memory + pos if self.pos_enc_at_cross_attn_keys else memory
+            num_frame, num_ptr = len(object_frame_scores), len(object_ptr_scores)
+            num_frame_ = int(num_frame*4096)
+            num_object = key_original.shape[0]
+            key_frame = key_original[:, :num_frame_].reshape(num_object, num_frame, 4096, -1)
+            key_ptr = key_original[:, num_frame_:].reshape(num_object, num_ptr, 4, -1)
+            scaling_low = 0.5
+            scaling_high = 1.5
+            if num_frame == 1:
+                key = key_original
+            else:
+                weight_frame = torch.stack(object_frame_scores, dim=1) # num_object, num_frame
+                weight_ptr = torch.stack(object_ptr_scores, dim=1) # num_object, num_ptr
+
+                standard_weight_frame = torch.linspace(scaling_low, scaling_high, num_frame).to(weight_frame) # num_frame
+                standard_weight_ptr = torch.linspace(scaling_low, scaling_high, num_ptr).to(weight_ptr) # num_ptr
+
+                new_weight_frame = torch.zeros_like(weight_frame)
+                new_weight_ptr = torch.zeros_like(weight_ptr)
+
+                new_weight_frame.scatter_(1, torch.argsort(weight_frame, dim=1), standard_weight_frame.unsqueeze(0).repeat([num_object, 1]))
+                new_weight_ptr.scatter_(1, torch.argsort(weight_ptr, dim=1), standard_weight_ptr.unsqueeze(0).repeat([num_object, 1]))
+                
+                key_frame_scale = (new_weight_frame[:, :, None, None].to(key_frame.device) * key_frame)
+                key_ptr_scale = (new_weight_ptr[:, :, None, None].to(key_ptr.device) * key_ptr)
+                key = torch.cat([key_frame_scale.reshape(num_object, num_frame_, -1), key_ptr_scale.reshape(num_object, int(num_ptr*4), -1)], dim=1)
+        # key = memory + pos if self.pos_enc_at_cross_attn_keys else memory
         tgt2 = self.cross_attn_image(
             q=tgt2 + query_pos if self.pos_enc_at_cross_attn_queries else tgt2,
-            k=memory + pos if self.pos_enc_at_cross_attn_keys else memory,
+            # k=memory + pos if self.pos_enc_at_cross_attn_keys else memory,
+            k=key,
             v=memory,
             **kwds,
         )
