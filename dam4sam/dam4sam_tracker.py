@@ -199,6 +199,12 @@ class DAM4SAMTracker():
         out_dict = {'pred_mask': m}
         return out_dict
 
+    @staticmethod
+    def _confidence_weight(logits):
+        prob = expit(logits)
+        entropy = -prob * np.log(prob + 1e-6) - (1 - prob) * np.log(1 - prob + 1e-6)
+        return 1.0 - np.mean(entropy)  # higher is better
+
     def _ensemble_masks(self, out_mask_logits,
                         pred_masks,
                         normalize=True,
@@ -207,44 +213,13 @@ class DAM4SAMTracker():
                         frame_rate=1,
                         w_shape=1.0,
                         w_com=1.0):
-        weights = []
-        probs = []
+        # weights = []
+        # probs = []
         self.prev_centroids.append(center_of_mass(self.prev_mask))
 
-        for logits, pred_mask in zip(out_mask_logits, pred_masks):
-            d = shifted_dice(pred_mask, self.prev_mask, self.prev_centroids, frame_rate)
-            p = shape_penalty(pred_mask, self.prev_mask)
-            com = center_of_mass_penalty(pred_mask, self.prev_centroids, frame_rate)
-            score = w_dice * d - w_shape * p - w_com * com
-
-            weights.append(score)
-            probs.append(logits)
-
-        weights = np.array(weights)
-
-        # Remove extremely bad predictions (optional)
-        weights[weights < 0] = 0
-
-        if normalize and weights.sum() > 0:
-            weights = weights / weights.sum()
-        else:
-            weights = np.ones_like(weights) / len(weights)
-
-        # Weighted average of probability maps
-        final_logits = np.tensordot(weights, np.stack(probs, axis=0), axes=1)
-        final_prob = expit(final_logits)
-        best_score = None
-        best_mask = None
-        for thresh in threshold_list:
-            mask = (final_prob > thresh).astype(np.uint8)
-            d = shifted_dice(mask, self.prev_mask, self.prev_centroids, frame_rate)
-            p = shape_penalty(mask, self.prev_mask)
-            com = center_of_mass_penalty(mask, self.prev_centroids, frame_rate)
-            score = w_dice * d - w_shape * p - w_com * com
-            if best_score is None or score > best_score:
-            # if score > best_score:
-                best_score = score
-                best_mask = mask
+        final_prob = expit(np.asarray(out_mask_logits)).mean(axis=0)
+        best_mask = (final_prob > 0.5).astype(np.uint8)
+        final_logits = np.log(final_prob / (1 - final_prob + 1e-8))
 
         return best_mask, final_logits
 
