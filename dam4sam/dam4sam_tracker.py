@@ -159,7 +159,7 @@ class DAM4SAMTracker():
         self.object_sizes = [] # List to store object sizes (number of pixels)
         self.all_masks = []
         self.last_added = -1 # Frame index of the last added frame into DRM memory
-
+        self.smoothed_logits = None
         self.inference_states = [p.init_state(image) for p in self.predictors]
 
         out_mask_logits = []
@@ -182,12 +182,24 @@ class DAM4SAMTracker():
         return out_dict
 
     @staticmethod
+    def temporal_logit_fusion(current_logits, prev_logits, frame_rate, min_alpha=0.1, max_alpha=0.4):
+        """
+        Smooth current logits with previous logits.
+        """
+        alpha = min_alpha + (frame_rate - 1) * (max_alpha - min_alpha) / 7
+        alpha = np.clip(alpha, min_alpha, max_alpha)
+
+        fused_logits = alpha * prev_logits + (1 - alpha) * current_logits
+        return fused_logits
+
+    @staticmethod
     def _confidence_weight(logits):
         prob = expit(logits)
         entropy = -prob * np.log(prob + 1e-6) - (1 - prob) * np.log(1 - prob + 1e-6)
         return 1.0 - np.mean(entropy)  # higher is better
 
-    def _ensemble_masks(self, out_mask_logits,
+    def _ensemble_masks(self,
+                        current_logits_list,
                         pred_masks,
                         normalize=True,
                         threshold_list=[0.45, 0.5, 0.66],
@@ -195,18 +207,24 @@ class DAM4SAMTracker():
                         frame_rate=1,
                         w_shape=1.0,
                         w_com=1.0):
-        # weights = []
-        # probs = []
-        # self.prev_centroids.append(center_of_mass(self.prev_mask))
-        out_mask_logits = np.asarray(out_mask_logits)
-        c_weights = self._confidence_weight(out_mask_logits)
-        c_weights = c_weights / np.sum(c_weights, axis=0)  # Normalize weights
-        final_logits = (out_mask_logits * c_weights).sum(axis=0)  # Weighted average of logits
-        # final_logits = expit(np.asarray(out_mask_logits)).mean(axis=0)
-        best_mask = (final_logits > 0.0).astype(np.uint8)
-        # final_logits = np.log(final_prob / (1 - final_prob + 1e-8))
 
-        return best_mask, final_logits
+        if self.smoothed_logits is not None:
+            self.smoothed_logits = [
+                self.temporal_logit_fusion(cl, pl, frame_rate=frame_rate)
+                for cl, pl in zip(current_logits_list, self.smoothed_logits)
+            ]
+        else:
+            self.smoothed_logits = current_logits_list
+
+        # Average probabilities across trackers
+        probs = [expit(logits) for logits in self.smoothed_logits]
+        avg_prob = np.mean(probs, axis=0)
+        final_mask = (avg_prob > 0.5).astype(np.uint8)
+
+        final_logits = np.log(avg_prob / (1 - avg_prob + 1e-8))
+
+        return final_mask, final_logits
+
 
     def compute_iou(self, mask1, mask2):
         """

@@ -85,7 +85,7 @@ model:
         num_layers: 2
 
   num_maskmem: 7
-  image_size: 512
+  image_size: 1024
   # apply scaled sigmoid on mask logits for memory encoder, and directly feed input mask as output mask
   # SAM decoder
   sigmoid_scale_for_mem_enc: 20.0
@@ -126,7 +126,7 @@ model:
   max_cond_frames_in_attn: 4 # number of elements in the DRM
 
   # KF
-  kf_mode: False
+  kf_mode: True
   stable_frames_threshold: 15
   stable_ious_threshold: 0.3
   min_obj_score_logits: -1
@@ -135,7 +135,7 @@ model:
   memory_bank_obj_score_threshold: 0.0
   memory_bank_kf_score_threshold: 0.0
   #rvcot
-  rvcot_mode: True
+  rvcot_mode: False
   rvcot_weight: 0.25
   rvcot_ious_threshold: 0.8 #rvcot:kf_weghted_iou低则用rvcot select
   memory_bank_rvcot_iou_threshold: 0.5
