@@ -13,7 +13,6 @@ from vot.region.raster import calculate_overlaps
 from vot.region.shapes import Mask
 from vot.region import RegionType
 
-from processing import dice_score, get_mask_stats, shape_penalty, center_of_mass_penalty, shifted_dice
 from sam2.build_sam import build_sam2_video_predictor
 from collections import OrderedDict
 import random
@@ -150,7 +149,7 @@ class DAM4SAMTracker():
         self.img_width = image.shape[-1]  # Original image width
         self.img_height = image.shape[-2]  # Original image height
         image = self._prepare_image(image)
-        self.initial_stats = get_mask_stats(init_mask)
+        # self.initial_stats = get_mask_stats(init_mask)
         self.init_mask = init_mask
         self.ensembling_params = ensembling_params
         self.prev_mask = init_mask
