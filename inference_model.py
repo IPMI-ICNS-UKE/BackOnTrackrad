@@ -178,9 +178,8 @@ def run_algorithm(frames: np.ndarray, target: np.ndarray, frame_rate: float, mag
 
         selected_mask = multi_tracker.track(frame)
         selected_mask = pad_to_full_image(selected_mask, initial_shape, bbox)
-
-        selected_mask = pad_to_full_image(selected_mask, initial_shape, bbox)
         selected_mask = close_mask(selected_mask.astype(bool))
+
         tracked_masks.append(selected_mask)
 
     tracked_masks = np.stack(tracked_masks, axis=-1)
