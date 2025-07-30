@@ -155,6 +155,7 @@ class DAM4SAMTracker():
         self.object_sizes = [] # List to store object sizes (number of pixels)
         self.all_masks = []
         self.last_added = -1 # Frame index of the last added frame into DRM memory
+        self.smoothed_logits = None
         
         self.img_width = image.shape[-1]  # Original image width
         self.img_height = image.shape[-2]  # Original image height
@@ -200,12 +201,24 @@ class DAM4SAMTracker():
         return out_dict
 
     @staticmethod
+    def temporal_logit_fusion(current_logits, prev_logits, frame_rate, min_alpha=0.1, max_alpha=0.4):
+        """
+        Smooth current logits with previous logits.
+        """
+        alpha = min_alpha + (frame_rate - 1) * (max_alpha - min_alpha) / 7
+        alpha = np.clip(alpha, min_alpha, max_alpha)
+
+        fused_logits = alpha * prev_logits + (1 - alpha) * current_logits
+        return fused_logits
+
+    @staticmethod
     def _confidence_weight(logits):
         prob = expit(logits)
         entropy = -prob * np.log(prob + 1e-6) - (1 - prob) * np.log(1 - prob + 1e-6)
         return 1.0 - np.mean(entropy)  # higher is better
 
-    def _ensemble_masks(self, out_mask_logits,
+    def _ensemble_masks(self,
+                        current_logits_list,
                         pred_masks,
                         normalize=True,
                         threshold_list=[0.45, 0.5, 0.66],
@@ -213,15 +226,23 @@ class DAM4SAMTracker():
                         frame_rate=1,
                         w_shape=1.0,
                         w_com=1.0):
-        # weights = []
-        # probs = []
-        self.prev_centroids.append(center_of_mass(self.prev_mask))
 
-        final_prob = expit(np.asarray(out_mask_logits)).mean(axis=0)
-        best_mask = (final_prob > 0.5).astype(np.uint8)
-        final_logits = np.log(final_prob / (1 - final_prob + 1e-8))
+        if self.smoothed_logits is not None:
+            self.smoothed_logits = [
+                self.temporal_logit_fusion(cl, pl, frame_rate=frame_rate)
+                for cl, pl in zip(current_logits_list, self.smoothed_logits)
+            ]
+        else:
+            self.smoothed_logits = current_logits_list
 
-        return best_mask, final_logits
+        # Average probabilities across trackers
+        probs = [expit(logits) for logits in self.smoothed_logits]
+        avg_prob = np.mean(probs, axis=0)
+        final_mask = (avg_prob > 0.5).astype(np.uint8)
+
+        final_logits = np.log(avg_prob / (1 - avg_prob + 1e-8))
+
+        return final_mask, final_logits
 
     def compute_iou(self, mask1, mask2):
         """
@@ -282,15 +303,15 @@ class DAM4SAMTracker():
         all_masks = [m > 0 for m in all_out_mask_logits]
 
         for i, p in zip(self.inference_states, self.predictors):
-            i['output_dict']['non_cond_frame_outputs'][self.frame_index]['n_pixels_pos'] = m.sum()
-            logits = F.resize(torch.as_tensor(logits[None, None], device=i['device']), size=p.image_size//4)
-            i['output_dict']['non_cond_frame_outputs'][self.frame_index]['pred_masks'] = logits
-            i['output_dict_per_obj'][0]['non_cond_frame_outputs'][self.frame_index]['n_pixels_pos'] = m.sum()
-            i['output_dict_per_obj'][0]['non_cond_frame_outputs'][self.frame_index]['pred_masks'] = logits
-            p._consolidate_temp_output_across_obj(i, self.frame_index,
-                                                  is_cond=False,
-                                                  run_mem_encoder=True,
-                                                  consolidate_at_video_res=False)
+           i['output_dict']['non_cond_frame_outputs'][self.frame_index]['n_pixels_pos'] = m.sum()
+           logits = F.resize(torch.as_tensor(logits[None, None], device=i['device']), size=p.image_size//4)
+           i['output_dict']['non_cond_frame_outputs'][self.frame_index]['pred_masks'] = logits
+           i['output_dict_per_obj'][0]['non_cond_frame_outputs'][self.frame_index]['n_pixels_pos'] = m.sum()
+           i['output_dict_per_obj'][0]['non_cond_frame_outputs'][self.frame_index]['pred_masks'] = logits
+           p._consolidate_temp_output_across_obj(i, self.frame_index,
+                                                 is_cond=False,
+                                                 run_mem_encoder=True,
+                                                 consolidate_at_video_res=False)
 
         # TODO woher kommt dieser wert eigentlich? können wir dafür irgendwo zwischen einen dice berechnen?  evtl prev frame?
         m_iou = np.mean(ious)
