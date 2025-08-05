@@ -57,7 +57,7 @@ ENV PATH="/root/.local/bin/:$PATH"
 
 #RUN apt-get update && apt-get install -y wget
 RUN pip install gdown
-RUN #wget -P /opt/app/resources/ https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+#RUN wget -P /opt/app/resources/ https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
 #RUN wget -P /opt/app/resources/ https://drive.google.com/file/d/1myBSBdS6wpN-9c0r7poY23_XaagHaEh-/view?usp=drive_link
 #RUN wget -P /opt/app/resources/ https://drive.google.com/file/d/1-3EQacNVMiUVyE6Gebaw5f6Kr1t0T7xA/view?usp=drive_link
 #RUN wget -P /opt/app/resources/ https://drive.google.com/file/d/1ciXB2eSZXrS-zRu7GtMGuJShNSuQkqNt/view?usp=drive_link
