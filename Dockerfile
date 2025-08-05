@@ -55,11 +55,15 @@ ENV PATH="/root/.local/bin/:$PATH"
 #$CMD $sam2p1_hiera_s_url || { echo "Failed to download checkpoint from $sam2p1_hiera_s_url"; exit 1; }
 #$CMD $sam2p1_hiera_b_plus_url || { echo "Failed to download checkpoint from $sam2p1_hiera_b_plus_url"; exit 1; }
 
-RUN apt-get update && apt-get install -y wget
-#RUN wget -P /opt/app/resources/ https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
-#RUN wget -P /opt/app/resources/ https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt
-#RUN wget -P /opt/app/resources/ https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt
-#RUN wget -P /opt/app/resources/ https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt
+#RUN apt-get update && apt-get install -y wget
+RUN pip install gdown
+RUN #wget -P /opt/app/resources/ https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+#RUN wget -P /opt/app/resources/ https://drive.google.com/file/d/1myBSBdS6wpN-9c0r7poY23_XaagHaEh-/view?usp=drive_link
+#RUN wget -P /opt/app/resources/ https://drive.google.com/file/d/1-3EQacNVMiUVyE6Gebaw5f6Kr1t0T7xA/view?usp=drive_link
+#RUN wget -P /opt/app/resources/ https://drive.google.com/file/d/1ciXB2eSZXrS-zRu7GtMGuJShNSuQkqNt/view?usp=drive_link
+RUN gdown -O /opt/app/resources --id 1myBSBdS6wpN-9c0r7poY23_XaagHaEh-
+RUN gdown -O /opt/app/resources --id 1-3EQacNVMiUVyE6Gebaw5f6Kr1t0T7xA
+RUN gdown -O /opt/app/resources --id 1ciXB2eSZXrS-zRu7GtMGuJShNSuQkqNt
 
 #COPY --chown=user:user sam2.1_hiera_large.pt /opt/app/resources/sam2.1_hiera_large.pt
 COPY --chown=user:user inference.py /opt/app/
