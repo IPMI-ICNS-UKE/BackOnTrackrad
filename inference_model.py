@@ -156,7 +156,7 @@ def preprocess_stable(image, reference=None):
 RESOURCE_PATH = Path("resources")  # load weights and other resources from this directory
 
 def run_algorithm(frames: np.ndarray, target: np.ndarray, frame_rate: float, magnetic_field_strength: float, scanned_region: str) -> np.ndarray:
-    multi_tracker = DAM4SAMTracker(tracker_names=['sam21pp-T', 'sam21pp-S',],# 'sam21pp-B'],#, 'sam21pp-L'],
+    multi_tracker = DAM4SAMTracker(tracker_names=['sam21pp-T'],# , 'sam21pp-S','sam21pp-B'],#, 'sam21pp-L'],
                                    base_path=RESOURCE_PATH)
 
     initial_mask = target[..., 0]
